@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Binance Tracker</title>
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; background:#0b0e11; color:#eaecef; margin:0; padding:16px; }
+    h1 { font-size:18px; margin:16px 0 8px; }
+    .muted { color:#848e9c; font-weight:400; font-size:13px; }
+    .top { display:flex; gap:10px; flex-wrap:wrap; }
+    .box { background:#1e2329; border-radius:12px; padding:12px 14px; flex:1; min-width:100px; }
+    .box .label { font-size:12px; color:#848e9c; }
+    .box .val { font-size:17px; font-weight:600; margin-top:4px; }
+    input { width:100%; box-sizing:border-box; background:#0b0e11; border:1px solid #2b3139; color:#eaecef; border-radius:8px; padding:10px; font-size:15px; margin-top:6px; }
+    .field { margin-top:8px; }
+    .field label { font-size:12px; color:#848e9c; }
+    .half { display:flex; gap:10px; }
+    .half .field { flex:1; }
+    .btns { display:flex; gap:10px; margin-top:12px; }
+    .btn { flex:1; border:none; border-radius:8px; padding:12px; font-size:15px; font-weight:700; color:#fff; }
+    .btn.long { background:#2ebd85; }
+    .btn.short { background:#f6465d; }
+    .mtoggle { background:#2b3139; color:#b7bdc6; padding:10px; }
+    .mtoggle.active { background:#f0b90b; color:#0b0e11; }
+    #orderStatus { font-size:13px; margin-top:10px; min-height:16px; }
+    .pos { background:#1e2329; border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+    .pos .head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+    .sym { font-size:15px; font-weight:700; }
+    .tag { font-size:12px; font-weight:700; padding:2px 8px; border-radius:6px; }
+    .long-tag { background:#0e3b2e; color:#2ebd85; }
+    .short-tag { background:#3b1414; color:#f6465d; }
+    .row { display:flex; justify-content:space-between; font-size:13px; padding:2px 0; color:#b7bdc6; }
+    .row span:last-child { color:#eaecef; font-weight:500; }
+    .green { color:#2ebd85; } .red { color:#f6465d; }
+  </style>
+</head>
+<body>
+  <h1>💰 Binance Futures Tracker <span class="muted">(Testnet)</span></h1>
+  <div class="top">
+    <div class="box"><div class="label">Margin Balance</div><div class="val" id="margin">—</div></div>
+    <div class="box"><div class="label">Unrealized PNL</div><div class="val" id="upnl">—</div></div>
+    <div class="box"><div class="label">Available</div><div class="val" id="avail">—</div></div>
+  </div>
+
+  <h1>Open Position</h1>
+  <div class="box" style="display:block;">
+    <div class="field"><label>Symbol</label><input id="symbol" value="BTCUSDT" /></div>
+    <div class="half">
+      <div class="field"><label>Quantity</label><input id="qty" value="0.002" /></div>
+      <div class="field"><label>Leverage (x)</label><input id="lev" value="20" /></div>
+    </div>
+    <div class="half">
+      <div class="field"><label>Take Profit (price)</label><input id="tp" placeholder="optional" /></div>
+      <div class="field"><label>Stop Loss (price)</label><input id="sl" placeholder="optional" /></div>
+    </div>
+    <div class="field">
+      <label>Margin Type</label>
+      <div class="btns" style="margin-top:6px;">
+        <button class="btn mtoggle active" id="mCross" onclick="setMargin('CROSSED')">Cross</button>
+        <button class="btn mtoggle" id="mIso" onclick="setMargin('ISOLATED')">Isolated</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Position Mode</label>
+      <div class="btns" style="margin-top:6px;">
+        <button class="btn mtoggle active" id="modeOneway" onclick="setMode(false)">One-way</button>
+        <button class="btn mtoggle" id="modeHedge" onclick="setMode(true)">Hedge</button>
+      </div>
+    </div>
+    <div class="btns">
+      <button class="btn long" onclick="openPosisi('BUY')">LONG</button>
+      <button class="btn short" onclick="openPosisi('SELL')">SHORT</button>
+    </div>
+    <div id="orderStatus" class="muted"></div>
+  </div>
+
+  <h1>Open Positions</h1>
+  <div id="positions"><p class="muted">loading...</p></div>
+
+  <script>
+    let hedgeOn = false;
+
+    function fmt(n, d = 2) {
+      return Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+    }
+    function warna(n) { return Number(n) >= 0 ? "green" : "red"; }
+    function setStatus(txt, cls) {
+      const s = document.getElementById("orderStatus");
+      s.textContent = txt; s.className = cls;
+    }
+
+    function applyMode(hedge) {
+      hedgeOn = hedge;
+      document.getElementById("modeOneway").classList.toggle("active", !hedge);
+      document.getElementById("modeHedge").classList.toggle("active", hedge);
+    }
+
+    async function loadMode() {
+      try {
+        const res = await fetch("/api/mode");
+        const d = await res.json();
+        if (typeof d.dualSidePosition === "boolean") applyMode(d.dualSidePosition);
+      } catch (e) {}
+    }
+
+    async function setMode(hedge) {
+      setStatus(hedge ? "Switching to Hedge..." : "Switching to One-way...", "muted");
+      try {
+        const res = await fetch("/api/mode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hedge }),
+        });
+        const d = await res.json();
+        const ok = d.code === 200 || (d.msg && d.msg.toLowerCase().includes("no need"));
+        if (ok) {
+          applyMode(hedge);
+          setStatus("✅ Mode: " + (hedge ? "Hedge" : "One-way"), "green");
+        } else {
+          setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
+        }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+
+    async function setMargin(type) {
+      const symbol = document.getElementById("symbol").value.trim().toUpperCase();
+      setStatus("Setting margin...", "muted");
+      try {
+        const res = await fetch("/api/margin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol, marginType: type }),
+        });
+        const d = await res.json();
+        const sukses = d.code === 200 || (d.msg && d.msg.toLowerCase().includes("no need"));
+        if (sukses) {
+          document.getElementById("mCross").classList.toggle("active", type === "CROSSED");
+          document.getElementById("mIso").classList.toggle("active", type === "ISOLATED");
+          setStatus("✅ Margin: " + (type === "CROSSED" ? "Cross" : "Isolated"), "green");
+        } else {
+          setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
+        }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+
+    async function openPosisi(side) {
+      const symbol = document.getElementById("symbol").value.trim().toUpperCase();
+      const quantity = document.getElementById("qty").value.trim();
+      const leverage = document.getElementById("lev").value.trim();
+      const tp = document.getElementById("tp").value.trim();
+      const sl = document.getElementById("sl").value.trim();
+      const positionSide = hedgeOn ? (side === "BUY" ? "LONG" : "SHORT") : null;
+      setStatus("Sending order...", "muted");
+      try {
+        const res = await fetch("/api/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol, side, quantity, leverage, tp, sl, positionSide }),
+        });
+        const d = await res.json();
+        if (d.orderId) {
+          let msg = "✅ Order placed! ID: " + d.orderId;
+          if (d.extra && d.extra.length) msg += " | " + d.extra.join(", ");
+          setStatus(msg, "green");
+          muat();
+        } else {
+          setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
+        }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+
+    async function muat() {
+      try {
+        const res = await fetch("/api/data");
+        const d = await res.json();
+        if (d.error) {
+          document.getElementById("positions").innerHTML = "<p class='red'>Error: " + d.error + "</p>";
+          return;
+        }
+        document.getElementById("margin").textContent = fmt(d.marginBalance) + " USDT";
+        const u = document.getElementById("upnl");
+        u.textContent = (d.unrealizedPnl >= 0 ? "+" : "") + fmt(d.unrealizedPnl) + " USDT";
+        u.className = "val " + warna(d.unrealizedPnl);
+        document.getElementById("avail").textContent = fmt(d.availableBalance) + " USDT";
+
+        const box = document.getElementById("positions");
+        if (d.positions.length === 0) {
+          box.innerHTML = "<p class='muted'>No open positions.</p>";
+          return;
+        }
+        box.innerHTML = d.positions.map(p => `
+          <div class="pos">
+            <div class="head">
+              <span class="sym">${p.symbol}</span>
+              <span class="tag ${p.side === 'LONG' ? 'long-tag' : 'short-tag'}">${p.side} ${p.leverage}x</span>
+            </div>
+            <div class="row"><span>Size</span><span>${p.size} (${p.marginType})</span></div>
+            <div class="row"><span>Margin Used</span><span>${fmt(p.margin)} USDT</span></div>
+            <div class="row"><span>Entry / Mark</span><span>${fmt(p.entryPrice)} / ${fmt(p.markPrice)}</span></div>
+            <div class="row"><span>PNL</span><span class="${warna(p.pnl)}">${p.pnl >= 0 ? '+' : ''}${fmt(p.pnl)} USDT</span></div>
+            <div class="row"><span>ROI</span><span class="${warna(p.roi)}">${p.roi >= 0 ? '+' : ''}${fmt(p.roi)}%</span></div>
+            <div class="row"><span>Liq. Price</span><span>${Number(p.liqPrice) > 0 ? fmt(p.liqPrice) : '-'}</span></div>
+          </div>
+        `).join("");
+      } catch (e) {
+        document.getElementById("positions").innerHTML = "<p class='red'>Failed: " + e.message + "</p>";
+      }
+    }
+
+    loadMode();
+    muat();
+    setInterval(muat, 2000);
+  </script>
+</body>
+</html>
