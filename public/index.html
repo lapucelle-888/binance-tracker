@@ -5,27 +5,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Binance Tracker</title>
   <style>
-    body { font-family: -apple-system, system-ui, sans-serif; background:#0b0e11; color:#eaecef; margin:0; padding:16px; }
-    h1 { font-size:18px; margin:16px 0 8px; }
+    body { font-family: -apple-system, system-ui, sans-serif; background:#0b0e11; color:#eaecef; margin:0; padding:12px; }
+    h1 { font-size:17px; margin:14px 0 6px; }
     .muted { color:#848e9c; font-weight:400; font-size:13px; }
-    .top { display:flex; gap:10px; flex-wrap:wrap; }
-    .box { background:#1e2329; border-radius:12px; padding:12px 14px; flex:1; min-width:100px; }
+    .apphead { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    .apphead h1 { margin:6px 0; }
+    .bellbtn { background:#1e2329; border:1px solid #2b3139; color:#eaecef; border-radius:8px; padding:8px 11px; font-size:16px; cursor:pointer; flex-shrink:0; }
+    .bellbtn:active { background:#2b3139; }
+    .top { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+    .box { background:#1e2329; border-radius:12px; padding:10px 12px; flex:1; min-width:100px; }
     .box .label { font-size:12px; color:#848e9c; }
-    .box .val { font-size:17px; font-weight:600; margin-top:4px; }
-    input { width:100%; box-sizing:border-box; background:#0b0e11; border:1px solid #2b3139; color:#eaecef; border-radius:8px; padding:10px; font-size:15px; margin-top:6px; }
-    .field { margin-top:8px; }
+    .box .val { font-size:17px; font-weight:600; margin-top:3px; }
+    input { width:100%; box-sizing:border-box; background:#0b0e11; border:1px solid #2b3139; color:#eaecef; border-radius:8px; padding:10px; font-size:15px; margin-top:5px; }
+    .field { margin-top:7px; }
     .field label { font-size:12px; color:#848e9c; }
-    .half { display:flex; gap:10px; }
+    .half { display:flex; gap:8px; }
     .half .field { flex:1; }
-    .btns { display:flex; gap:10px; margin-top:12px; }
+    .btns { display:flex; gap:8px; margin-top:10px; }
     .btn { flex:1; border:none; border-radius:8px; padding:12px; font-size:15px; font-weight:700; color:#fff; }
     .btn.long { background:#2ebd85; }
     .btn.short { background:#f6465d; }
     .mtoggle { background:#2b3139; color:#b7bdc6; padding:10px; }
     .mtoggle.active { background:#f0b90b; color:#0b0e11; }
-    #orderStatus { font-size:13px; margin-top:10px; min-height:16px; }
-    .pos { background:#1e2329; border-radius:12px; padding:12px 14px; margin-bottom:10px; }
-    .pos .head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+    #orderStatus { font-size:13px; margin-top:9px; min-height:16px; }
+    .poshead { display:flex; justify-content:space-between; align-items:center; }
+    .closeall { background:#f6465d; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-size:13px; font-weight:700; }
+    .pos { background:#1e2329; border-radius:12px; padding:11px 13px; margin-bottom:9px; }
+    .pos .head { display:flex; justify-content:space-between; align-items:center; margin-bottom:7px; }
     .sym { font-size:15px; font-weight:700; }
     .tag { font-size:12px; font-weight:700; padding:2px 8px; border-radius:6px; }
     .long-tag { background:#0e3b2e; color:#2ebd85; }
@@ -33,10 +39,36 @@
     .row { display:flex; justify-content:space-between; font-size:13px; padding:2px 0; color:#b7bdc6; }
     .row span:last-child { color:#eaecef; font-weight:500; }
     .green { color:#2ebd85; } .red { color:#f6465d; }
+    .closebtn { margin-top:9px; width:100%; background:#2b3139; color:#eaecef; border:none; border-radius:8px; padding:10px; font-size:13px; font-weight:600; }
+    .hedge-toggle { display:flex; justify-content:space-between; align-items:center; background:#1a1f26; border:1px solid #2b3139; border-radius:10px; padding:10px 14px; margin-top:10px; cursor:pointer; user-select:none; }
+    .hedge-toggle.on { border-color:#f0b90b; background:#241f0a; }
+    .hedge-label { display:flex; flex-direction:column; gap:2px; }
+    .hedge-title { font-size:14px; font-weight:700; }
+    .hedge-state { font-size:11px; font-weight:700; color:#848e9c; letter-spacing:.5px; }
+    .hedge-toggle.on .hedge-state { color:#f0b90b; }
+    .switch { width:48px; height:28px; border-radius:999px; background:#2b3139; position:relative; transition:background .2s; flex-shrink:0; }
+    .hedge-toggle.on .switch { background:#f0b90b; }
+    .knob { position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:50%; background:#fff; transition:left .2s; }
+    .hedge-toggle.on .knob { left:23px; }
+    .overlay { position:fixed; inset:0; background:rgba(0,0,0,.65); display:none; align-items:center; justify-content:center; padding:20px; z-index:100; }
+    .overlay.show { display:flex; }
+    .modal { background:#1e2329; border:1px solid #2b3139; border-radius:14px; padding:18px; width:100%; max-width:360px; box-shadow:0 10px 40px rgba(0,0,0,.5); }
+    .modal-title { font-size:16px; font-weight:700; margin-bottom:12px; }
+    .mrow { display:flex; justify-content:space-between; font-size:14px; padding:7px 0; border-bottom:1px solid #2b3139; color:#848e9c; }
+    .mrow:last-child { border-bottom:none; }
+    .mrow span:last-child { color:#eaecef; font-weight:600; }
+    .modal-btns { display:flex; gap:10px; margin-top:16px; }
+    .modal-btn { flex:1; border:none; border-radius:8px; padding:12px; font-size:15px; font-weight:700; color:#fff; cursor:pointer; }
+    .modal-btn.long { background:#2ebd85; }
+    .modal-btn.short { background:#f6465d; }
+    .modal-cancel { background:#2b3139; color:#eaecef; }
   </style>
 </head>
 <body>
-  <h1>💰 Binance Futures Tracker <span class="muted">(Testnet)</span></h1>
+  <div class="apphead">
+    <h1>💰 Binance Futures Tracker <span class="muted">(Testnet)</span></h1>
+    <button class="bellbtn" onclick="testTelegram()" title="Test Telegram">🔔</button>
+  </div>
   <div class="top">
     <div class="box"><div class="label">Margin Balance</div><div class="val" id="margin">—</div></div>
     <div class="box"><div class="label">Unrealized PNL</div><div class="val" id="upnl">—</div></div>
@@ -47,12 +79,12 @@
   <div class="box" style="display:block;">
     <div class="field"><label>Symbol</label><input id="symbol" value="BTCUSDT" /></div>
     <div class="half">
-      <div class="field"><label>Quantity</label><input id="qty" value="0.002" /></div>
+      <div class="field"><label>Margin (USDT)</label><input id="usdt" value="10" /></div>
       <div class="field"><label>Leverage (x)</label><input id="lev" value="20" /></div>
     </div>
     <div class="half">
-      <div class="field"><label>Take Profit (price)</label><input id="tp" placeholder="optional" /></div>
-      <div class="field"><label>Stop Loss (price)</label><input id="sl" placeholder="optional" /></div>
+      <div class="field"><label>Take Profit (% price)</label><input id="tp" placeholder="e.g. 5" /></div>
+      <div class="field"><label>Stop Loss (% price)</label><input id="sl" placeholder="e.g. 3" /></div>
     </div>
     <div class="field">
       <label>Margin Type</label>
@@ -61,13 +93,15 @@
         <button class="btn mtoggle" id="mIso" onclick="setMargin('ISOLATED')">Isolated</button>
       </div>
     </div>
-    <div class="field">
-      <label>Position Mode</label>
-      <div class="btns" style="margin-top:6px;">
-        <button class="btn mtoggle active" id="modeOneway" onclick="setMode(false)">One-way</button>
-        <button class="btn mtoggle" id="modeHedge" onclick="setMode(true)">Hedge</button>
+
+    <div class="hedge-toggle" id="hedgeToggle" onclick="toggleHedge()">
+      <div class="hedge-label">
+        <span class="hedge-title">Hedge Mode</span>
+        <span class="hedge-state" id="hedgeState">OFF · One-way</span>
       </div>
+      <div class="switch"><div class="knob"></div></div>
     </div>
+
     <div class="btns">
       <button class="btn long" onclick="openPosisi('BUY')">LONG</button>
       <button class="btn short" onclick="openPosisi('SELL')">SHORT</button>
@@ -75,11 +109,26 @@
     <div id="orderStatus" class="muted"></div>
   </div>
 
-  <h1>Open Positions</h1>
+  <div class="poshead">
+    <h1>Open Positions</h1>
+    <button class="closeall" onclick="closeAll()">Close All</button>
+  </div>
   <div id="positions"><p class="muted">loading...</p></div>
+
+  <div class="overlay" id="modalOverlay" onclick="if(event.target===this)modalAnswer(false)">
+    <div class="modal">
+      <div class="modal-title" id="modalTitle"></div>
+      <div id="modalBody"></div>
+      <div class="modal-btns">
+        <button class="modal-btn modal-cancel" onclick="modalAnswer(false)">Cancel</button>
+        <button class="modal-btn" id="modalConfirm" onclick="modalAnswer(true)">Confirm</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     let hedgeOn = false;
+    let modalResolve = null;
 
     function fmt(n, d = 2) {
       return Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -90,11 +139,29 @@
       s.textContent = txt; s.className = cls;
     }
 
+    function customConfirm({ title, bodyHtml, confirmText, confirmClass }) {
+      return new Promise(resolve => {
+        modalResolve = resolve;
+        document.getElementById("modalTitle").textContent = title;
+        document.getElementById("modalBody").innerHTML = bodyHtml || "";
+        const btn = document.getElementById("modalConfirm");
+        btn.textContent = confirmText || "Confirm";
+        btn.className = "modal-btn " + (confirmClass || "long");
+        document.getElementById("modalOverlay").classList.add("show");
+      });
+    }
+    function modalAnswer(ok) {
+      document.getElementById("modalOverlay").classList.remove("show");
+      if (modalResolve) { modalResolve(ok); modalResolve = null; }
+    }
+
     function applyMode(hedge) {
       hedgeOn = hedge;
-      document.getElementById("modeOneway").classList.toggle("active", !hedge);
-      document.getElementById("modeHedge").classList.toggle("active", hedge);
+      document.getElementById("hedgeToggle").classList.toggle("on", hedge);
+      document.getElementById("hedgeState").textContent = hedge ? "ON · Hedge" : "OFF · One-way";
     }
+
+    function toggleHedge() { setMode(!hedgeOn); }
 
     async function loadMode() {
       try {
@@ -146,27 +213,118 @@
 
     async function openPosisi(side) {
       const symbol = document.getElementById("symbol").value.trim().toUpperCase();
-      const quantity = document.getElementById("qty").value.trim();
+      const usdt = document.getElementById("usdt").value.trim();
       const leverage = document.getElementById("lev").value.trim();
-      const tp = document.getElementById("tp").value.trim();
-      const sl = document.getElementById("sl").value.trim();
+      const tpPct = document.getElementById("tp").value.trim();
+      const slPct = document.getElementById("sl").value.trim();
       const positionSide = hedgeOn ? (side === "BUY" ? "LONG" : "SHORT") : null;
+      const dir = side === "BUY" ? "LONG" : "SHORT";
+      const notional = (Number(usdt) * Number(leverage)) || 0;
+
+      // Hitung harga TP/SL dari persen (butuh harga sekarang)
+      let tpPrice = "", slPrice = "";
+      if (tpPct || slPct) {
+        setStatus("Calculating TP/SL...", "muted");
+        let price = 0;
+        try {
+          const pr = await fetch("/api/price?symbol=" + symbol);
+          const pd = await pr.json();
+          price = Number(pd.price);
+        } catch (e) {}
+        if (!price) { setStatus("❌ Couldn't fetch price for TP/SL. Try again.", "red"); return; }
+        if (tpPct) tpPrice = side === "BUY" ? price * (1 + tpPct / 100) : price * (1 - tpPct / 100);
+        if (slPct) slPrice = side === "BUY" ? price * (1 - slPct / 100) : price * (1 + slPct / 100);
+      }
+
+      let body = "";
+      body += '<div class="mrow"><span>Direction</span><span class="' + (side === "BUY" ? "green" : "red") + '">' + dir + '</span></div>';
+      body += '<div class="mrow"><span>Symbol</span><span>' + symbol + '</span></div>';
+      body += '<div class="mrow"><span>Margin</span><span>' + usdt + ' USDT × ' + leverage + 'x</span></div>';
+      body += '<div class="mrow"><span>Position size</span><span>~' + notional.toFixed(2) + ' USDT</span></div>';
+      body += '<div class="mrow"><span>Mode</span><span>' + (hedgeOn ? "Hedge" : "One-way") + '</span></div>';
+      if (tpPrice) body += '<div class="mrow"><span>Take Profit</span><span class="green">+' + tpPct + '% → ~' + fmt(tpPrice) + '</span></div>';
+      if (slPrice) body += '<div class="mrow"><span>Stop Loss</span><span class="red">-' + slPct + '% → ~' + fmt(slPrice) + '</span></div>';
+
+      const ok = await customConfirm({
+        title: "Open " + dir + " position?",
+        bodyHtml: body,
+        confirmText: dir,
+        confirmClass: side === "BUY" ? "long" : "short",
+      });
+      if (!ok) { setStatus("Order cancelled.", "muted"); return; }
+
       setStatus("Sending order...", "muted");
       try {
         const res = await fetch("/api/order", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ symbol, side, quantity, leverage, tp, sl, positionSide }),
+          body: JSON.stringify({
+            symbol, side, usdt, leverage,
+            tp: tpPrice ? String(tpPrice) : "",
+            sl: slPrice ? String(slPrice) : "",
+            positionSide,
+          }),
         });
         const d = await res.json();
         if (d.orderId) {
           let msg = "✅ Order placed! ID: " + d.orderId;
+          if (d.quantity) msg += " | Qty: " + d.quantity;
           if (d.extra && d.extra.length) msg += " | " + d.extra.join(", ");
           setStatus(msg, "green");
           muat();
         } else {
           setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
         }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+
+    async function closePos(symbol, positionSide) {
+      setStatus("Closing " + symbol + " " + positionSide + "...", "muted");
+      try {
+        const res = await fetch("/api/close", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol, positionSide }),
+        });
+        const d = await res.json();
+        if (d.orderId) {
+          setStatus("✅ Closed " + symbol + " " + positionSide, "green");
+          muat();
+        } else {
+          setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
+        }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+
+    async function closeAll() {
+      const ok = await customConfirm({
+        title: "Close all positions?",
+        bodyHtml: '<div class="mrow"><span>This closes</span><span>ALL open positions</span></div><div class="mrow"><span>Order type</span><span>Market</span></div>',
+        confirmText: "Close All",
+        confirmClass: "short",
+      });
+      if (!ok) return;
+      setStatus("Closing all positions...", "muted");
+      try {
+        const res = await fetch("/api/close-all", { method: "POST" });
+        const d = await res.json();
+        if (d.closed) {
+          const okc = d.closed.filter(c => c.ok).length;
+          setStatus("✅ Closed " + okc + "/" + d.closed.length + " positions", okc > 0 ? "green" : "red");
+          muat();
+        } else {
+          setStatus("❌ " + (d.error || JSON.stringify(d)), "red");
+        }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+
+    async function testTelegram() {
+      setStatus("Sending test to Telegram...", "muted");
+      try {
+        const res = await fetch("/api/test-telegram", { method: "POST" });
+        const d = await res.json();
+        if (d.ok) setStatus("✅ Sent! Check your Telegram.", "green");
+        else setStatus("❌ " + d.error, "red");
       } catch (e) { setStatus("❌ " + e.message, "red"); }
     }
 
@@ -201,6 +359,7 @@
             <div class="row"><span>PNL</span><span class="${warna(p.pnl)}">${p.pnl >= 0 ? '+' : ''}${fmt(p.pnl)} USDT</span></div>
             <div class="row"><span>ROI</span><span class="${warna(p.roi)}">${p.roi >= 0 ? '+' : ''}${fmt(p.roi)}%</span></div>
             <div class="row"><span>Liq. Price</span><span>${Number(p.liqPrice) > 0 ? fmt(p.liqPrice) : '-'}</span></div>
+            <button class="closebtn" onclick="closePos('${p.symbol}','${p.positionSide}')">Close ${p.side}</button>
           </div>
         `).join("");
       } catch (e) {
