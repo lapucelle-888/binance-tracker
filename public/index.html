@@ -62,12 +62,35 @@
     .modal-btn.long { background:#2ebd85; }
     .modal-btn.short { background:#f6465d; }
     .modal-cancel { background:#2b3139; color:#eaecef; }
+    #loginOverlay { position:fixed; inset:0; background:#0b0e11; display:none; align-items:center; justify-content:center; padding:24px; z-index:1000; }
+    #loginOverlay.show { display:flex; }
+    .login-card { background:#1e2329; border:1px solid #2b3139; border-radius:14px; padding:22px; width:100%; max-width:320px; text-align:center; }
+    .login-card h2 { font-size:18px; margin:0 0 4px; }
+    .login-card p { font-size:12px; color:#848e9c; margin:0 0 16px; }
+    .login-card input { text-align:center; letter-spacing:3px; }
+    .login-card button { width:100%; margin-top:12px; background:#f0b90b; color:#0b0e11; border:none; border-radius:8px; padding:12px; font-size:15px; font-weight:700; cursor:pointer; }
+    #loginErr { color:#f6465d; font-size:12px; min-height:16px; margin-top:8px; }
+    .lockbtn { background:#1e2329; border:1px solid #2b3139; color:#eaecef; border-radius:8px; padding:8px 11px; font-size:16px; cursor:pointer; flex-shrink:0; }
+    .lockbtn:active { background:#2b3139; }
   </style>
 </head>
 <body>
+  <div id="loginOverlay" class="show">
+    <div class="login-card">
+      <h2>🔒 Locked</h2>
+      <p>Enter password to access your tracker</p>
+      <input id="loginPw" type="password" placeholder="Password"
+             onkeydown="if(event.key==='Enter')doLogin()" autocomplete="current-password" />
+      <button onclick="doLogin()">Unlock</button>
+      <div id="loginErr"></div>
+    </div>
+  </div>
   <div class="apphead">
     <h1>💰 Binance Futures Tracker <span class="muted">(Testnet)</span></h1>
-    <button class="bellbtn" onclick="testTelegram()" title="Test Telegram">🔔</button>
+    <div style="display:flex; gap:8px;">
+      <button class="bellbtn" onclick="testTelegram()" title="Test Telegram">🔔</button>
+      <button class="lockbtn" onclick="lockApp()" title="Lock app">🔒</button>
+    </div>
   </div>
   <div class="top">
     <div class="box"><div class="label">Margin Balance</div><div class="val" id="margin">—</div></div>
@@ -127,6 +150,51 @@
   </div>
 
   <script>
+    // ===== AUTH / LOGIN GATE =====
+    const _origFetch = window.fetch.bind(window);
+    window.fetch = function (url, options = {}) {
+      const isApi = typeof url === "string" && url.startsWith("/api/") && url !== "/api/login";
+      if (isApi) {
+        options.headers = Object.assign({}, options.headers, {
+          "X-App-Token": sessionStorage.getItem("appToken") || "",
+        });
+      }
+      return _origFetch(url, options).then((res) => {
+        if (isApi && res.status === 401) showLogin(); // token mati / gak ada → balik ke login
+        return res;
+      });
+    };
+
+    function showLogin() {
+      document.getElementById("loginOverlay").classList.add("show");
+    }
+    function lockApp() {
+      sessionStorage.removeItem("appToken");
+      showLogin();
+    }
+    async function doLogin() {
+      const pw = document.getElementById("loginPw").value;
+      const errEl = document.getElementById("loginErr");
+      errEl.textContent = "";
+      try {
+        const res = await _origFetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: pw }),
+        });
+        const d = await res.json();
+        if (d.ok && d.token) {
+          sessionStorage.setItem("appToken", d.token);
+          document.getElementById("loginPw").value = "";
+          startApp();
+        } else {
+          errEl.textContent = d.error || "Login failed";
+        }
+      } catch (e) {
+        errEl.textContent = e.message;
+      }
+    }
+    // ===== END AUTH =====
     let hedgeOn = false;
     let modalResolve = null;
 
@@ -367,9 +435,16 @@
       }
     }
 
-    loadMode();
-    muat();
-    setInterval(muat, 2000);
+    let _pollStarted = false;
+    function startApp() {
+      document.getElementById("loginOverlay").classList.remove("show");
+      loadMode();
+      muat();
+      if (!_pollStarted) { _pollStarted = true; setInterval(muat, 2000); }
+    }
+    // gerbang awal: ada token → langsung jalan; gak ada → tetap di layar login
+    if (sessionStorage.getItem("appToken")) startApp();
+    else showLogin();
   </script>
 </body>
 </html>

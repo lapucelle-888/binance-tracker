@@ -11,6 +11,8 @@ const BASE_URL = "https://testnet.binancefuture.com";
 
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID;
+const APP_PASSWORD = process.env.APP_PASSWORD;
+const SESSION_HOURS = 8; // berapa jam token login valid sebelum minta login ulang
 
 const ROI_THRESHOLDS = [-100, -50, -30, -10, 10, 30, 50, 100];
 const ALERT_COOLDOWN_MS = 15 * 60 * 1000;
@@ -21,6 +23,26 @@ let exchangeInfoCache = null;
 
 function sign(query) {
   return crypto.createHmac("sha256", API_SECRET).update(query).digest("hex");
+}
+function signToken(expiry) {
+  return crypto.createHmac("sha256", "session:" + (APP_PASSWORD || "")).update(String(expiry)).digest("hex");
+}
+function makeToken() {
+  const expiry = Date.now() + SESSION_HOURS * 60 * 60 * 1000;
+  return expiry + "." + signToken(expiry);
+}
+function verifyToken(token) {
+  if (!token || typeof token !== "string" || !token.includes(".")) return false;
+  const [expStr, sig] = token.split(".");
+  const expiry = Number(expStr);
+  if (!expiry || Date.now() > expiry) return false; // token kedaluwarsa → tolak
+  const expected = signToken(expiry);
+  if (sig.length !== expected.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+}
+function requireAuth(req, res, next) {
+  if (verifyToken(req.headers["x-app-token"])) return next();
+  res.status(401).json({ error: "Unauthorized — login dulu." });
 }
 
 async function signedRequest(method, path, params = {}) {
@@ -184,6 +206,18 @@ async function checkAlerts() {
   }
 }
 
+// --- LOGIN GATE ---
+app.post("/api/login", (req, res) => {
+  if (!APP_PASSWORD) return res.status(500).json({ ok: false, error: "APP_PASSWORD belum diset di Secrets" });
+  if (req.body.password === APP_PASSWORD) {
+    res.json({ ok: true, token: makeToken() });
+  } else {
+    res.status(401).json({ ok: false, error: "Password salah" });
+  }
+});
+// semua /api/* di bawah baris ini WAJIB token valid (kecuali /api/login di atas)
+app.use("/api", requireAuth);
+// --- END LOGIN GATE ---
 app.get("/api/balance", async (req, res) => {
   try { res.json(await signedRequest("GET", "/fapi/v2/balance")); }
   catch (err) { res.status(500).json({ error: err.message }); }
