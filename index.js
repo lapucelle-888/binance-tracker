@@ -74,12 +74,33 @@ async function loadExchangeInfo() {
   return exchangeInfoCache;
 }
 
+async function getMaxQty(symbol, orderType) {
+  const info = await loadExchangeInfo();
+  const s = info.symbols.find(x => x.symbol === symbol);
+  if (!s) return null;
+  const wanted = orderType === "MARKET" ? "MARKET_LOT_SIZE" : "LOT_SIZE";
+  let f = s.filters.find(x => x.filterType === wanted);
+  if (!f) f = s.filters.find(x => x.filterType === "LOT_SIZE"); // fallback
+  return f ? Number(f.maxQty) : null;
+}
+
 async function getStepSize(symbol) {
   const info = await loadExchangeInfo();
   const s = info.symbols.find(x => x.symbol === symbol);
   if (!s) return null;
   const lot = s.filters.find(f => f.filterType === "LOT_SIZE");
   return lot ? lot.stepSize : null;
+}
+async function getMaxLeverage(symbol) {
+  try {
+    const b = await signedRequest("GET", "/fapi/v1/leverageBracket", { symbol });
+    const entry = Array.isArray(b) ? (b.find(x => x.symbol === symbol) || b[0]) : b;
+    const brackets = entry && entry.brackets;
+    if (brackets && brackets.length) {
+      return Math.max(...brackets.map(x => Number(x.initialLeverage)));
+    }
+  } catch (e) {}
+  return null;
 }
 
 async function getTickSize(symbol) {
@@ -235,6 +256,14 @@ app.get("/api/data", async (req, res) => {
   try {
     const account = await signedRequest("GET", "/fapi/v2/account");
     const risk = await signedRequest("GET", "/fapi/v2/positionRisk");
+
+    const marginBalance = Number(account.totalMarginBalance);
+    const totalMaintMargin = Number(account.totalMaintMargin);
+    const accountMarginRatio = marginBalance > 0 ? (totalMaintMargin / marginBalance) * 100 : 0;
+
+    const acctPos = {};
+    (account.positions || []).forEach(p => { acctPos[p.symbol + "_" + p.positionSide] = p; });
+
     const positions = risk
       .filter(p => Number(p.positionAmt) !== 0)
       .map(p => {
@@ -247,19 +276,27 @@ app.get("/api/data", async (req, res) => {
         const side = p.positionSide && p.positionSide !== "BOTH"
           ? p.positionSide
           : (amt > 0 ? "LONG" : "SHORT");
+
+        const ap = acctPos[p.symbol + "_" + p.positionSide];
+        let marginRatio = null;
+        if (ap && marginBalance > 0) marginRatio = (Number(ap.maintMargin) / marginBalance) * 100;
+
         return {
           symbol: p.symbol, side, size: Math.abs(amt),
           entryPrice: entry, markPrice: Number(p.markPrice),
           pnl, roi, liqPrice: Number(p.liquidationPrice),
           leverage: lev, marginType: p.marginType,
           margin: initialMargin,
+          marginRatio,
           positionSide: p.positionSide,
         };
       });
+
     res.json({
-      marginBalance: Number(account.totalMarginBalance),
+      marginBalance,
       unrealizedPnl: Number(account.totalUnrealizedProfit),
       availableBalance: Number(account.availableBalance),
+      marginRatio: accountMarginRatio,
       positions,
     });
   } catch (err) {
@@ -305,19 +342,49 @@ app.post("/api/order", async (req, res) => {
     const { symbol, side, usdt, leverage, tp, sl, positionSide } = req.body;
     const sym = String(symbol).toUpperCase();
     const hedge = positionSide && positionSide !== "BOTH";
+    const orderType = (req.body.orderType || "MARKET").toUpperCase(); // MARKET | LIMIT
+    const note = [];
 
+    // 1) Set leverage + tau leverage ASLI yang dipakai Binance
+    let effectiveLev = Number(leverage) || 1;
     if (leverage) {
-      await signedRequest("POST", "/fapi/v1/leverage", { symbol: sym, leverage });
+      let levRes = await signedRequest("POST", "/fapi/v1/leverage", { symbol: sym, leverage });
+      if (levRes.leverage) {
+        effectiveLev = Number(levRes.leverage);
+      } else {
+        const maxLev = await getMaxLeverage(sym);
+        if (maxLev && Number(leverage) > maxLev) {
+          levRes = await signedRequest("POST", "/fapi/v1/leverage", { symbol: sym, leverage: maxLev });
+          if (!levRes.leverage) {
+            return res.json({ error: "Set leverage gagal buat " + sym + ": " + (levRes.msg || JSON.stringify(levRes)) });
+          }
+          effectiveLev = Number(levRes.leverage);
+          note.push("⚠️ " + sym + " max " + effectiveLev + "x — di-cap dari " + leverage + "x");
+        } else {
+          return res.json({ error: "Set leverage gagal buat " + sym + ": " + (levRes.msg || JSON.stringify(levRes)) });
+        }
+      }
     }
 
+    // 2) Tick size (buat bulatin limit price & TP/SL)
+    const tickSize = await getTickSize(sym);
+
+    // 3) Limit price (kalau LIMIT)
+    let limitPx = null;
+    if (orderType === "LIMIT") {
+      const raw = Number(req.body.limitPrice);
+      if (!raw || raw <= 0) return res.json({ error: "Limit price wajib diisi & > 0." });
+      limitPx = tickSize ? roundToTick(raw, tickSize) : String(raw);
+    }
+
+    // 4) Quantity dari leverage ASLI + harga acuan (limit pakai limitPx)
     let quantity;
     if (usdt) {
-      const price = await getPrice(sym);
       const stepSize = await getStepSize(sym);
-      if (!price || !stepSize) return res.json({ error: "Cannot get price/stepSize for " + sym });
-      const lev = Number(leverage) || 1;
-      const notional = Number(usdt) * lev;
-      quantity = roundToStep(notional / price, stepSize);
+      const basePrice = orderType === "LIMIT" ? Number(limitPx) : await getPrice(sym);
+      if (!basePrice || !stepSize) return res.json({ error: "Cannot get price/stepSize for " + sym });
+      const notional = Number(usdt) * effectiveLev;
+      quantity = roundToStep(notional / basePrice, stepSize);
       if (Number(quantity) <= 0) {
         return res.json({ error: "Margin too small (qty rounds to 0). Naikkan margin atau leverage." });
       }
@@ -325,23 +392,35 @@ app.post("/api/order", async (req, res) => {
       quantity = req.body.quantity;
     }
 
-    const entryParams = { symbol: sym, side, type: "MARKET", quantity };
+    // 4b) Cap qty ke max quantity symbol (MARKET_LOT_SIZE / LOT_SIZE)
+    const maxQty = await getMaxQty(sym, orderType);
+    if (maxQty && Number(quantity) > maxQty) {
+      const stepSize = await getStepSize(sym);
+      const capped = stepSize ? roundToStep(maxQty, stepSize) : String(maxQty);
+      note.push("⚠️ " + sym + " max qty " + maxQty + " — di-cap dari " + quantity + " → " + capped);
+      quantity = capped;
+    }
+
+    // 5) Entry order (MARKET atau LIMIT GTC)
+    const entryParams = { symbol: sym, side, quantity };
+    if (orderType === "LIMIT") {
+      entryParams.type = "LIMIT";
+      entryParams.price = limitPx;
+      entryParams.timeInForce = "GTC";
+    } else {
+      entryParams.type = "MARKET";
+    }
     if (hedge) entryParams.positionSide = positionSide;
     const entry = await signedRequest("POST", "/fapi/v1/order", entryParams);
     if (!entry.orderId) return res.json(entry);
 
+    // 6) TP/SL conditional via algoOrder
     const closeSide = side === "BUY" ? "SELL" : "BUY";
     const extra = [];
 
-    let tickSize = null;
-    if (tp || sl) tickSize = await getTickSize(sym);
-
     if (tp) {
       const trigger = tickSize ? roundToTick(Number(tp), tickSize) : tp;
-      const tpParams = {
-        symbol: sym, algoType: "CONDITIONAL", side: closeSide,
-        type: "TAKE_PROFIT_MARKET", triggerPrice: trigger, closePosition: "true",
-      };
+      const tpParams = { symbol: sym, algoType: "CONDITIONAL", side: closeSide, type: "TAKE_PROFIT_MARKET", triggerPrice: trigger, closePosition: "true" };
       if (hedge) tpParams.positionSide = positionSide;
       const tpRes = await signedRequest("POST", "/fapi/v1/algoOrder", tpParams);
       extra.push(tpRes.algoId ? "TP ✓" : ("TP failed: " + (tpRes.msg || "")));
@@ -349,20 +428,18 @@ app.post("/api/order", async (req, res) => {
 
     if (sl) {
       const trigger = tickSize ? roundToTick(Number(sl), tickSize) : sl;
-      const slParams = {
-        symbol: sym, algoType: "CONDITIONAL", side: closeSide,
-        type: "STOP_MARKET", triggerPrice: trigger, closePosition: "true",
-      };
+      const slParams = { symbol: sym, algoType: "CONDITIONAL", side: closeSide, type: "STOP_MARKET", triggerPrice: trigger, closePosition: "true" };
       if (hedge) slParams.positionSide = positionSide;
       const slRes = await signedRequest("POST", "/fapi/v1/algoOrder", slParams);
       extra.push(slRes.algoId ? "SL ✓" : ("SL failed: " + (slRes.msg || "")));
     }
 
-    res.json({ orderId: entry.orderId, quantity, extra });
+    res.json({ orderId: entry.orderId, quantity, leverage: effectiveLev, type: orderType, extra: extra.concat(note) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 app.post("/api/close", async (req, res) => {
   try {
@@ -394,6 +471,152 @@ app.post("/api/close-all", async (req, res) => {
       });
     }
     res.json({ closed });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/close-partial", async (req, res) => {
+  try {
+    const { symbol, positionSide, percent } = req.body;
+    const sym = String(symbol).toUpperCase();
+    const pct = Number(percent);
+    if (!pct || pct <= 0 || pct > 100) return res.json({ error: "Percent harus 1–100." });
+
+    const risk = await signedRequest("GET", "/fapi/v2/positionRisk");
+    const pos = risk.find(p =>
+      p.symbol === sym &&
+      Number(p.positionAmt) !== 0 &&
+      (!positionSide || positionSide === "BOTH" || p.positionSide === positionSide)
+    );
+    if (!pos) return res.json({ error: "Posisi " + sym + " gak ketemu." });
+
+    const amt = Number(pos.positionAmt);
+    const closeSide = amt > 0 ? "SELL" : "BUY";
+    const stepSize = await getStepSize(sym);
+    let qty = Math.abs(amt) * (pct / 100);
+    qty = stepSize ? roundToStep(qty, stepSize) : String(qty);
+    if (Number(qty) <= 0) return res.json({ error: "Qty partial kebuletin jadi 0. Pakai % lebih gede." });
+
+    const params = { symbol: sym, side: closeSide, type: "MARKET", quantity: qty };
+    if (pos.positionSide && pos.positionSide !== "BOTH") params.positionSide = pos.positionSide;
+    else params.reduceOnly = "true";
+
+    const r = await signedRequest("POST", "/fapi/v1/order", params);
+    if (r.orderId) res.json({ ok: true, orderId: r.orderId, qty, percent: pct });
+    else res.json({ error: r.msg || JSON.stringify(r) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get("/api/open-orders", async (req, res) => {
+  try {
+    const orders = await signedRequest("GET", "/fapi/v1/openOrders");
+    if (!Array.isArray(orders)) return res.json({ error: orders.msg || JSON.stringify(orders) });
+    res.json({
+      orders: orders.map(o => ({
+        symbol: o.symbol,
+        orderId: o.orderId,
+        side: o.side,
+        type: o.type,
+        price: Number(o.price),
+        stopPrice: Number(o.stopPrice),
+        qty: o.origQty,
+        positionSide: o.positionSide,
+        status: o.status,
+      })),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/cancel-order", async (req, res) => {
+  try {
+    const { symbol, orderId } = req.body;
+    res.json(await signedRequest("DELETE", "/fapi/v1/order", {
+      symbol: String(symbol).toUpperCase(),
+      orderId,
+    }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get("/api/algo-orders", async (req, res) => {
+  try {
+    const orders = await signedRequest("GET", "/fapi/v1/openAlgoOrders");
+    if (!Array.isArray(orders)) return res.json({ error: orders.msg || JSON.stringify(orders) });
+    res.json({
+      orders: orders.map(o => ({
+        algoId: o.algoId,
+        symbol: o.symbol,
+        orderType: o.orderType,        // TAKE_PROFIT_MARKET / STOP_MARKET
+        side: o.side,
+        positionSide: o.positionSide,
+        triggerPrice: Number(o.triggerPrice),
+        closePosition: o.closePosition,
+        quantity: o.quantity,
+        status: o.algoStatus,
+      })),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/cancel-algo", async (req, res) => {
+  try {
+    const { algoId } = req.body;
+    res.json(await signedRequest("DELETE", "/fapi/v1/algoOrder", { algoId }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/set-stop", async (req, res) => {
+  try {
+    const { symbol, positionSide, kind, triggerPrice } = req.body;
+    const sym = String(symbol).toUpperCase();
+    const k = String(kind).toUpperCase(); // "TP" | "SL"
+    if (!triggerPrice || Number(triggerPrice) <= 0) return res.json({ error: "Trigger price wajib > 0." });
+
+    // cari posisi yang dimaksud
+    const risk = await signedRequest("GET", "/fapi/v2/positionRisk");
+    const pos = risk.find(p =>
+      p.symbol === sym &&
+      Number(p.positionAmt) !== 0 &&
+      (!positionSide || positionSide === "BOTH" || p.positionSide === positionSide)
+    );
+    if (!pos) return res.json({ error: "Posisi " + sym + " gak ketemu." });
+
+    const amt = Number(pos.positionAmt);
+    const isLong = pos.positionSide === "LONG" || (pos.positionSide === "BOTH" && amt > 0);
+    const closeSide = isLong ? "SELL" : "BUY";
+    const hedge = pos.positionSide && pos.positionSide !== "BOTH";
+
+    const tickSize = await getTickSize(sym);
+    const trigger = tickSize ? roundToTick(Number(triggerPrice), tickSize) : String(triggerPrice);
+
+    // cancel TP/SL lama yang sejenis buat posisi ini → biar jadi "update", bukan numpuk
+    const wantType = k === "TP" ? "TAKE_PROFIT" : "STOP";
+    let cancelled = 0;
+    try {
+      const algos = await signedRequest("GET", "/fapi/v1/openAlgoOrders", { symbol: sym });
+      if (Array.isArray(algos)) {
+        for (const a of algos) {
+          const sameKind = (a.orderType || "").includes(wantType);
+          const samePos = !hedge || a.positionSide === pos.positionSide;
+          if (sameKind && samePos && a.algoId) {
+            await signedRequest("DELETE", "/fapi/v1/algoOrder", { algoId: a.algoId });
+            cancelled++;
+          }
+        }
+      }
+    } catch (e) {}
+
+    // pasang yang baru (closePosition: nutup full pas trigger)
+    const params = {
+      symbol: sym,
+      algoType: "CONDITIONAL",
+      side: closeSide,
+      type: k === "TP" ? "TAKE_PROFIT_MARKET" : "STOP_MARKET",
+      triggerPrice: trigger,
+      closePosition: "true",
+    };
+    if (hedge) params.positionSide = pos.positionSide;
+    const r = await signedRequest("POST", "/fapi/v1/algoOrder", params);
+    if (r.algoId) res.json({ ok: true, algoId: r.algoId, kind: k, trigger, replaced: cancelled });
+    else res.json({ error: (r.msg || JSON.stringify(r)) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

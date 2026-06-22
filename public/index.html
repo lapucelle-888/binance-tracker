@@ -72,6 +72,25 @@
     #loginErr { color:#f6465d; font-size:12px; min-height:16px; margin-top:8px; }
     .lockbtn { background:#1e2329; border:1px solid #2b3139; color:#eaecef; border-radius:8px; padding:8px 11px; font-size:16px; cursor:pointer; flex-shrink:0; }
     .lockbtn:active { background:#2b3139; }
+    .tabbar { display:flex; align-items:center; gap:18px; border-bottom:1px solid #2b3139; margin:16px 0 10px; }
+    .tab { background:none; border:none; color:#848e9c; font-size:16px; font-weight:700; padding:6px 0 9px; position:relative; cursor:pointer; }
+    .tab.active { color:#eaecef; }
+    .tab.active::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:3px; border-radius:2px; background:#f0b90b; }
+    .tabbar .closeall { margin-left:auto; }
+    .selectwrap { position:relative; }
+    .selectwrap::after { content:"▾"; position:absolute; right:12px; top:62%; transform:translateY(-50%); color:#848e9c; pointer-events:none; font-size:12px; }
+    select { width:100%; box-sizing:border-box; background:#0b0e11; border:1px solid #2b3139; color:#eaecef; border-radius:8px; padding:10px; font-size:15px; margin-top:5px; -webkit-appearance:none; appearance:none; }
+    .yellow { color:#f0b90b; }
+    .stoprow { display:flex; gap:6px; margin-top:9px; }
+    .stopinput { flex:1; width:auto; min-width:0; margin-top:0; padding:9px 10px; font-size:13px; }
+    .stopbtn { border:none; border-radius:8px; padding:9px 12px; font-size:13px; font-weight:700; color:#fff; cursor:pointer; white-space:nowrap; }
+    .stopbtn.tp { background:#2ebd85; }
+    .stopbtn.sl { background:#f6465d; }
+
+    .partialrow { display:flex; gap:6px; margin-top:9px; }
+    .pbtn { flex:1; background:#2b3139; color:#eaecef; border:none; border-radius:8px; padding:9px; font-size:12px; font-weight:600; cursor:pointer; }
+    .pbtn:active { background:#3a424d; }
+
   </style>
 </head>
 <body>
@@ -102,19 +121,37 @@
   <div class="box" style="display:block;">
     <div class="field"><label>Symbol</label><input id="symbol" value="BTCUSDT" /></div>
     <div class="half">
+      <div class="field">
+        <label>Order Type</label>
+        <div class="selectwrap">
+          <select id="orderTypeSel" onchange="setOrderType(this.value)">
+            <option value="MARKET">Market</option>
+            <option value="LIMIT">Limit</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Margin Type</label>
+        <div class="selectwrap">
+          <select id="marginSel" onchange="setMargin(this.value)">
+            <option value="CROSSED">Cross</option>
+            <option value="ISOLATED">Isolated</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="field" id="limitPriceField" style="display:none;">
+      <label>Limit Price</label>
+      <input id="limitPrice" placeholder="e.g. 70.00" />
+    </div>
+
+    <div class="half">
       <div class="field"><label>Margin (USDT)</label><input id="usdt" value="10" /></div>
       <div class="field"><label>Leverage (x)</label><input id="lev" value="20" /></div>
     </div>
     <div class="half">
       <div class="field"><label>Take Profit (% price)</label><input id="tp" placeholder="e.g. 5" /></div>
       <div class="field"><label>Stop Loss (% price)</label><input id="sl" placeholder="e.g. 3" /></div>
-    </div>
-    <div class="field">
-      <label>Margin Type</label>
-      <div class="btns" style="margin-top:6px;">
-        <button class="btn mtoggle active" id="mCross" onclick="setMargin('CROSSED')">Cross</button>
-        <button class="btn mtoggle" id="mIso" onclick="setMargin('ISOLATED')">Isolated</button>
-      </div>
     </div>
 
     <div class="hedge-toggle" id="hedgeToggle" onclick="toggleHedge()">
@@ -132,23 +169,24 @@
     <div id="orderStatus" class="muted"></div>
   </div>
 
-  <div class="poshead">
-    <h1>Open Positions</h1>
-    <button class="closeall" onclick="closeAll()">Close All</button>
+  <div class="tabbar">
+    <button class="tab active" id="tabPositions" onclick="switchTab('positions')">Positions (<span id="posCount">0</span>)</button>
+    <button class="tab" id="tabOrders" onclick="switchTab('orders')">Open Orders (<span id="ordCount">0</span>)</button>
+    <button class="closeall" id="closeAllBtn" onclick="closeAll()">Close All</button>
   </div>
   <div id="positions"><p class="muted">loading...</p></div>
+  <div id="orders" style="display:none;"><p class="muted">loading...</p></div>
 
-  <div class="overlay" id="modalOverlay" onclick="if(event.target===this)modalAnswer(false)">
+  <div class="overlay" id="modalOverlay">
     <div class="modal">
-      <div class="modal-title" id="modalTitle"></div>
+      <div class="modal-title" id="modalTitle">Confirm</div>
       <div id="modalBody"></div>
       <div class="modal-btns">
         <button class="modal-btn modal-cancel" onclick="modalAnswer(false)">Cancel</button>
-        <button class="modal-btn" id="modalConfirm" onclick="modalAnswer(true)">Confirm</button>
+        <button class="modal-btn long" id="modalConfirm" onclick="modalAnswer(true)">Confirm</button>
       </div>
     </div>
   </div>
-
   <script>
     // ===== AUTH / LOGIN GATE =====
     const _origFetch = window.fetch.bind(window);
@@ -228,6 +266,29 @@
       document.getElementById("hedgeToggle").classList.toggle("on", hedge);
       document.getElementById("hedgeState").textContent = hedge ? "ON · Hedge" : "OFF · One-way";
     }
+    
+    let orderType = "MARKET";
+    function setOrderType(t) {
+      orderType = t;
+      document.getElementById("limitPriceField").style.display = t === "LIMIT" ? "" : "none";
+    }
+
+    function switchTab(name) {
+      const isPos = name === "positions";
+      document.getElementById("tabPositions").classList.toggle("active", isPos);
+      document.getElementById("tabOrders").classList.toggle("active", !isPos);
+      document.getElementById("positions").style.display = isPos ? "" : "none";
+      document.getElementById("orders").style.display = isPos ? "none" : "";
+      document.getElementById("closeAllBtn").style.display = isPos ? "" : "none";
+    }
+
+    function warnaRatio(r) {
+      if (r == null) return "";
+      if (r >= 80) return "red";
+      if (r >= 40) return "yellow";
+      return "green";
+    }
+
 
     function toggleHedge() { setMode(!hedgeOn); }
 
@@ -269,46 +330,57 @@
         });
         const d = await res.json();
         const sukses = d.code === 200 || (d.msg && d.msg.toLowerCase().includes("no need"));
-        if (sukses) {
-          document.getElementById("mCross").classList.toggle("active", type === "CROSSED");
-          document.getElementById("mIso").classList.toggle("active", type === "ISOLATED");
-          setStatus("✅ Margin: " + (type === "CROSSED" ? "Cross" : "Isolated"), "green");
-        } else {
-          setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
-        }
+        if (sukses) setStatus("✅ Margin: " + (type === "CROSSED" ? "Cross" : "Isolated"), "green");
+        else setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
       } catch (e) { setStatus("❌ " + e.message, "red"); }
     }
 
-    async function openPosisi(side) {
+        async function openPosisi(side) {
       const symbol = document.getElementById("symbol").value.trim().toUpperCase();
       const usdt = document.getElementById("usdt").value.trim();
       const leverage = document.getElementById("lev").value.trim();
       const tpPct = document.getElementById("tp").value.trim();
       const slPct = document.getElementById("sl").value.trim();
+      const limitPrice = document.getElementById("limitPrice").value.trim();
       const positionSide = hedgeOn ? (side === "BUY" ? "LONG" : "SHORT") : null;
       const dir = side === "BUY" ? "LONG" : "SHORT";
       const notional = (Number(usdt) * Number(leverage)) || 0;
 
-      // Hitung harga TP/SL dari persen (butuh harga sekarang)
-      let tpPrice = "", slPrice = "";
-      if (tpPct || slPct) {
-        setStatus("Calculating TP/SL...", "muted");
-        let price = 0;
-        try {
-          const pr = await fetch("/api/price?symbol=" + symbol);
-          const pd = await pr.json();
-          price = Number(pd.price);
-        } catch (e) {}
-        if (!price) { setStatus("❌ Couldn't fetch price for TP/SL. Try again.", "red"); return; }
-        if (tpPct) tpPrice = side === "BUY" ? price * (1 + tpPct / 100) : price * (1 - tpPct / 100);
-        if (slPct) slPrice = side === "BUY" ? price * (1 - slPct / 100) : price * (1 + slPct / 100);
+      if (orderType === "LIMIT" && (!Number(limitPrice) || Number(limitPrice) <= 0)) {
+        setStatus("❌ Isi Limit Price dulu (angka > 0).", "red"); return;
       }
+
+      // harga acuan TP/SL: limit → limitPrice, market → harga pasar
+      let basePrice = 0;
+      if (tpPct || slPct) {
+        if (orderType === "LIMIT") {
+          basePrice = Number(limitPrice);
+        } else {
+          setStatus("Calculating TP/SL...", "muted");
+          try {
+            const pr = await fetch("/api/price?symbol=" + symbol);
+            const pd = await pr.json();
+            basePrice = Number(pd.price);
+          } catch (e) {}
+          if (!basePrice) { setStatus("❌ Couldn't fetch price for TP/SL. Try again.", "red"); return; }
+        }
+      }
+          
+      let tpPrice = "", slPrice = "";
+      if (tpPct) tpPrice = side === "BUY" ? basePrice * (1 + tpPct / 100) : basePrice * (1 - tpPct / 100);
+      if (slPct) slPrice = side === "BUY" ? basePrice * (1 - slPct / 100) : basePrice * (1 + slPct / 100);
 
       let body = "";
       body += '<div class="mrow"><span>Direction</span><span class="' + (side === "BUY" ? "green" : "red") + '">' + dir + '</span></div>';
       body += '<div class="mrow"><span>Symbol</span><span>' + symbol + '</span></div>';
+      body += '<div class="mrow"><span>Order type</span><span>' + orderType + (orderType === "LIMIT" ? " @ " + limitPrice : "") + '</span></div>';
       body += '<div class="mrow"><span>Margin</span><span>' + usdt + ' USDT × ' + leverage + 'x</span></div>';
-      body += '<div class="mrow"><span>Position size</span><span>~' + notional.toFixed(2) + ' USDT</span></div>';
+      body += '<div class="mrow"><span>Est. size</span><span>~' + notional.toFixed(2) + ' USDT</span></div>';
+          const avail = window._avail || 0;
+          const pctAvail = avail > 0 ? (Number(usdt) / avail) * 100 : 0;
+          if (pctAvail >= 50) {
+            body += '<div class="mrow"><span>⚠️ Margin</span><span class="red">' + pctAvail.toFixed(0) + '% of available</span></div>';
+          }
       body += '<div class="mrow"><span>Mode</span><span>' + (hedgeOn ? "Hedge" : "One-way") + '</span></div>';
       if (tpPrice) body += '<div class="mrow"><span>Take Profit</span><span class="green">+' + tpPct + '% → ~' + fmt(tpPrice) + '</span></div>';
       if (slPrice) body += '<div class="mrow"><span>Stop Loss</span><span class="red">-' + slPct + '% → ~' + fmt(slPrice) + '</span></div>';
@@ -328,6 +400,8 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             symbol, side, usdt, leverage,
+            orderType,
+            limitPrice: orderType === "LIMIT" ? limitPrice : "",
             tp: tpPrice ? String(tpPrice) : "",
             sl: slPrice ? String(slPrice) : "",
             positionSide,
@@ -335,10 +409,11 @@
         });
         const d = await res.json();
         if (d.orderId) {
-          let msg = "✅ Order placed! ID: " + d.orderId;
+          let msg = "✅ " + (d.type || "") + " order placed! ID: " + d.orderId;
           if (d.quantity) msg += " | Qty: " + d.quantity;
+          if (d.leverage) msg += " | " + d.leverage + "x";
           if (d.extra && d.extra.length) msg += " | " + d.extra.join(", ");
-          setStatus(msg, "green");
+          setStatus(msg, (d.extra && d.extra.some(x => x.includes("⚠️"))) ? "muted" : "green");
           muat();
         } else {
           setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
@@ -346,6 +421,173 @@
       } catch (e) { setStatus("❌ " + e.message, "red"); }
     }
 
+    async function muatOrders() {
+      try {
+        const [r1, r2] = await Promise.all([
+          fetch("/api/open-orders").then(r => r.json()),
+          fetch("/api/algo-orders").then(r => r.json()),
+        ]);
+        const regular = r1.orders || [];
+        const algos = r2.orders || [];
+        const n = regular.length + algos.length;
+        const c = document.getElementById("ordCount");
+        if (c) c.textContent = n;
+
+        const box = document.getElementById("orders");
+        if (!box) return;
+        if (r1.error && r2.error) { box.innerHTML = "<p class='red'>Error: " + (r1.error || r2.error) + "</p>"; return; }
+        if (n === 0) { box.innerHTML = "<p class='muted'>No pending orders.</p>"; return; }
+
+        let html = "";
+        // limit entry orders
+        html += regular.map(o => `
+          <div class="pos">
+            <div class="head">
+              <span class="sym">${o.symbol}</span>
+              <span class="tag ${o.side === 'BUY' ? 'long-tag' : 'short-tag'}">${o.side} ${o.type}</span>
+            </div>
+            <div class="row"><span>Price</span><span>${o.price ? fmt(o.price) : (o.stopPrice ? fmt(o.stopPrice) : '-')}</span></div>
+            <div class="row"><span>Qty</span><span>${o.qty}</span></div>
+            ${o.positionSide && o.positionSide !== 'BOTH' ? `<div class="row"><span>Position</span><span>${o.positionSide}</span></div>` : ``}
+            <button class="closebtn" onclick="cancelOrder('${o.symbol}','${o.orderId}')">Cancel order</button>
+          </div>
+        `).join("");
+        // TP/SL conditional orders
+        html += algos.map(o => {
+          const isTP = (o.orderType || "").includes("TAKE_PROFIT");
+          const label = isTP ? "TP" : "SL";
+          const tagClass = isTP ? "long-tag" : "short-tag";
+          return `
+            <div class="pos">
+              <div class="head">
+                <span class="sym">${o.symbol}</span>
+                <span class="tag ${tagClass}">${label}${o.closePosition ? " · Close" : ""}</span>
+              </div>
+              <div class="row"><span>Trigger</span><span>${fmt(o.triggerPrice)}</span></div>
+              ${o.positionSide && o.positionSide !== 'BOTH' ? `<div class="row"><span>Position</span><span>${o.positionSide}</span></div>` : ``}
+              <button class="closebtn" onclick="cancelAlgo('${o.algoId}')">Cancel ${label}</button>
+            </div>`;
+        }).join("");
+        box.innerHTML = html;
+      } catch (e) {
+        const box = document.getElementById("orders");
+        if (box) box.innerHTML = "<p class='red'>Failed: " + e.message + "</p>";
+      }
+    }
+
+    async function cancelOrder(symbol, orderId) {
+      const ok = await customConfirm({
+        title: "Cancel this order?",
+        bodyHtml: '<div class="mrow"><span>Symbol</span><span>' + symbol + '</span></div><div class="mrow"><span>Order ID</span><span>' + orderId + '</span></div>',
+        confirmText: "Cancel order",
+        confirmClass: "short",
+      });
+      if (!ok) return;
+      setStatus("Cancelling order...", "muted");
+      try {
+        const res = await fetch("/api/cancel-order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol, orderId }),
+        });
+        const d = await res.json();
+        if (d.orderId || d.status === "CANCELED") {
+          setStatus("✅ Order cancelled.", "green");
+          muatOrders();
+        } else {
+          setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
+        }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+
+    async function cancelAlgo(algoId) {
+      const ok = await customConfirm({
+        title: "Cancel this TP/SL?",
+        bodyHtml: '<div class="mrow"><span>Algo ID</span><span>' + algoId + '</span></div>',
+        confirmText: "Cancel",
+        confirmClass: "short",
+      });
+      if (!ok) return;
+      setStatus("Cancelling...", "muted");
+      try {
+        const res = await fetch("/api/cancel-algo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ algoId }),
+        });
+        const d = await res.json();
+        if (d.code === "200" || d.code === 200 || d.algoId) {
+          setStatus("✅ TP/SL cancelled.", "green");
+          muatOrders();
+        } else {
+          setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
+        }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+
+    async function setStop(symbol, positionSide, kind) {
+      const el = document.getElementById("stop_" + symbol + "_" + positionSide);
+      const triggerPrice = el ? el.value.trim() : "";
+      if (!Number(triggerPrice) || Number(triggerPrice) <= 0) {
+        setStatus("❌ Isi trigger price dulu (angka > 0).", "red"); return;
+      }
+      const ok = await customConfirm({
+        title: "Set " + kind + " for " + symbol + "?",
+        bodyHtml:
+          '<div class="mrow"><span>Symbol</span><span>' + symbol + '</span></div>' +
+          '<div class="mrow"><span>Type</span><span>' + (kind === "TP" ? "Take Profit" : "Stop Loss") + '</span></div>' +
+          '<div class="mrow"><span>Trigger</span><span>' + triggerPrice + '</span></div>' +
+          '<div class="mrow"><span>Note</span><span>Replaces existing ' + kind + '</span></div>',
+        confirmText: "Set " + kind,
+        confirmClass: kind === "TP" ? "long" : "short",
+      });
+      if (!ok) return;
+      setStatus("Setting " + kind + "...", "muted");
+      try {
+        const res = await fetch("/api/set-stop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol, positionSide, kind, triggerPrice }),
+        });
+        const d = await res.json();
+        if (d.ok || d.algoId) {
+          let msg = "✅ " + kind + " set @ " + (d.trigger || triggerPrice);
+          if (d.replaced) msg += " (replaced " + d.replaced + " old)";
+          setStatus(msg, "green");
+          muatOrders();
+        } else {
+          setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
+        }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+
+    async function closePartial(symbol, positionSide, percent) {
+      const ok = await customConfirm({
+        title: "Close " + percent + "% of " + symbol + "?",
+        bodyHtml:
+          '<div class="mrow"><span>Symbol</span><span>' + symbol + '</span></div>' +
+          '<div class="mrow"><span>Close</span><span>' + percent + '% (market)</span></div>',
+        confirmText: "Close " + percent + "%",
+        confirmClass: "short",
+      });
+      if (!ok) return;
+      setStatus("Closing " + percent + "%...", "muted");
+      try {
+        const res = await fetch("/api/close-partial", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol, positionSide, percent }),
+        });
+        const d = await res.json();
+        if (d.ok || d.orderId) {
+          setStatus("✅ Closed " + percent + "% (qty " + d.qty + ")", "green");
+          muat();
+        } else {
+          setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
+        }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+    
     async function closePos(symbol, positionSide) {
       setStatus("Closing " + symbol + " " + positionSide + "...", "muted");
       try {
@@ -409,6 +651,14 @@
         u.textContent = (d.unrealizedPnl >= 0 ? "+" : "") + fmt(d.unrealizedPnl) + " USDT";
         u.className = "val " + warna(d.unrealizedPnl);
         document.getElementById("avail").textContent = fmt(d.availableBalance) + " USDT";
+        window._avail = d.availableBalance;
+
+        const pc = document.getElementById("posCount");
+        if (pc) pc.textContent = d.positions.length;
+
+        // jangan render ulang kartu kalau lagi ngetik trigger (biar input gak kehapus tiap 2 detik)
+        const active = document.activeElement;
+        if (active && active.classList && active.classList.contains("stopinput")) return;
 
         const box = document.getElementById("positions");
         if (d.positions.length === 0) {
@@ -423,10 +673,21 @@
             </div>
             <div class="row"><span>Size</span><span>${p.size} (${p.marginType})</span></div>
             <div class="row"><span>Margin Used</span><span>${fmt(p.margin)} USDT</span></div>
+            <div class="row"><span>Margin Ratio</span><span class="${warnaRatio(p.marginRatio)}">${p.marginRatio == null ? '-' : fmt(p.marginRatio) + '%'}</span></div>
             <div class="row"><span>Entry / Mark</span><span>${fmt(p.entryPrice)} / ${fmt(p.markPrice)}</span></div>
             <div class="row"><span>PNL</span><span class="${warna(p.pnl)}">${p.pnl >= 0 ? '+' : ''}${fmt(p.pnl)} USDT</span></div>
             <div class="row"><span>ROI</span><span class="${warna(p.roi)}">${p.roi >= 0 ? '+' : ''}${fmt(p.roi)}%</span></div>
             <div class="row"><span>Liq. Price</span><span>${Number(p.liqPrice) > 0 ? fmt(p.liqPrice) : '-'}</span></div>
+            <div class="partialrow">
+              <button class="pbtn" onclick="closePartial('${p.symbol}','${p.positionSide}',25)">Close 25%</button>
+              <button class="pbtn" onclick="closePartial('${p.symbol}','${p.positionSide}',50)">Close 50%</button>
+              <button class="pbtn" onclick="closePartial('${p.symbol}','${p.positionSide}',75)">Close 75%</button>
+            </div>
+            <div class="stoprow">
+              <input class="stopinput" id="stop_${p.symbol}_${p.positionSide}" placeholder="Trigger price" inputmode="decimal" />
+              <button class="stopbtn tp" onclick="setStop('${p.symbol}','${p.positionSide}','TP')">Set TP</button>
+              <button class="stopbtn sl" onclick="setStop('${p.symbol}','${p.positionSide}','SL')">Set SL</button>
+            </div>
             <button class="closebtn" onclick="closePos('${p.symbol}','${p.positionSide}')">Close ${p.side}</button>
           </div>
         `).join("");
@@ -436,12 +697,18 @@
     }
 
     let _pollStarted = false;
-    function startApp() {
+        function startApp() {
       document.getElementById("loginOverlay").classList.remove("show");
       loadMode();
       muat();
-      if (!_pollStarted) { _pollStarted = true; setInterval(muat, 2000); }
+      muatOrders();
+      if (!_pollStarted) {
+        _pollStarted = true;
+        setInterval(muat, 2000);
+        setInterval(muatOrders, 5000);
+      }
     }
+
     // gerbang awal: ada token → langsung jalan; gak ada → tetap di layar login
     if (sessionStorage.getItem("appToken")) startApp();
     else showLogin();
