@@ -7,18 +7,18 @@ app.use(express.json());
 
 const API_KEY = process.env.BINANCE_API_KEY;
 const API_SECRET = process.env.BINANCE_API_SECRET;
-const BASE_URL = "https://testnet.binancefuture.com";
+const BASE_URL = "https://fapi.binance.com";
 
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID;
 const APP_PASSWORD = process.env.APP_PASSWORD;
-const SESSION_HOURS = 8; // berapa jam token login valid sebelum minta login ulang
+const SESSION_HOURS = 2; // berapa jam token login valid sebelum minta login ulang
 const LOGIN_MAX_FAILS = 5;             // berapa kali salah sebelum kekunci
 const LOGIN_LOCK_MS = 5 * 60 * 1000;   // lama lockout (5 menit)
 const loginAttempts = {};              // { ip: { count, lockUntil } }
 
-const ROI_THRESHOLDS = [-100, -50, -30, -10, 10, 30, 50, 100];
-const ALERT_COOLDOWN_MS = 15 * 60 * 1000;
+const ROI_THRESHOLDS = [-200, -100, -50, 50, 100, 200, 500];
+const ALERT_COOLDOWN_MS = 60 * 60 * 1000;
 const lastAlerted = {};
 let alertRunning = false;
 
