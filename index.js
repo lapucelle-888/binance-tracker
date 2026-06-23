@@ -13,6 +13,9 @@ const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID;
 const APP_PASSWORD = process.env.APP_PASSWORD;
 const SESSION_HOURS = 8; // berapa jam token login valid sebelum minta login ulang
+const LOGIN_MAX_FAILS = 5;             // berapa kali salah sebelum kekunci
+const LOGIN_LOCK_MS = 5 * 60 * 1000;   // lama lockout (5 menit)
+const loginAttempts = {};              // { ip: { count, lockUntil } }
 
 const ROI_THRESHOLDS = [-100, -50, -30, -10, 10, 30, 50, 100];
 const ALERT_COOLDOWN_MS = 15 * 60 * 1000;
@@ -20,6 +23,8 @@ const lastAlerted = {};
 let alertRunning = false;
 
 let exchangeInfoCache = null;
+let exchangeInfoAt = 0;
+const EXCHANGE_INFO_TTL_MS = 6 * 60 * 60 * 1000; // refresh tiap 6 jam
 
 function sign(query) {
   return crypto.createHmac("sha256", API_SECRET).update(query).digest("hex");
@@ -67,9 +72,14 @@ async function getPrice(symbol) {
 }
 
 async function loadExchangeInfo() {
-  if (!exchangeInfoCache) {
+  const now = Date.now();
+  if (!exchangeInfoCache || (now - exchangeInfoAt) > EXCHANGE_INFO_TTL_MS) {
     const r = await fetch(`${BASE_URL}/fapi/v1/exchangeInfo`);
-    exchangeInfoCache = await r.json();
+    const data = await r.json();
+    if (data && data.symbols) {        // cuma timpa cache kalau respons valid
+      exchangeInfoCache = data;
+      exchangeInfoAt = now;
+    }
   }
   return exchangeInfoCache;
 }
@@ -230,12 +240,39 @@ async function checkAlerts() {
 // --- LOGIN GATE ---
 app.post("/api/login", (req, res) => {
   if (!APP_PASSWORD) return res.status(500).json({ ok: false, error: "APP_PASSWORD belum diset di Secrets" });
-  if (req.body.password === APP_PASSWORD) {
-    res.json({ ok: true, token: makeToken() });
-  } else {
-    res.status(401).json({ ok: false, error: "Password salah" });
+
+  const now = Date.now();
+  // prune entri basi biar map gak numpuk
+  for (const k in loginAttempts) {
+    if (loginAttempts[k].lockUntil < now && loginAttempts[k].count === 0) delete loginAttempts[k];
   }
+
+  const key = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "unknown";
+  const rec = loginAttempts[key] || { count: 0, lockUntil: 0 };
+
+  // lagi kekunci?
+  if (rec.lockUntil > now) {
+    const sisa = Math.ceil((rec.lockUntil - now) / 1000);
+    return res.status(429).json({ ok: false, error: "Kebanyakan salah. Coba lagi " + sisa + " detik." });
+  }
+
+  if (req.body.password === APP_PASSWORD) {
+    delete loginAttempts[key]; // sukses → reset hitungan
+    return res.json({ ok: true, token: makeToken() });
+  }
+
+  // salah → tambah hitungan
+  rec.count += 1;
+  if (rec.count >= LOGIN_MAX_FAILS) {
+    rec.lockUntil = now + LOGIN_LOCK_MS;
+    rec.count = 0;
+    loginAttempts[key] = rec;
+    return res.status(429).json({ ok: false, error: "Kebanyakan salah. Kekunci " + (LOGIN_LOCK_MS / 60000) + " menit." });
+  }
+  loginAttempts[key] = rec;
+  return res.status(401).json({ ok: false, error: "Password salah. Sisa " + (LOGIN_MAX_FAILS - rec.count) + " percobaan." });
 });
+
 // semua /api/* di bawah baris ini WAJIB token valid (kecuali /api/login di atas)
 app.use("/api", requireAuth);
 // --- END LOGIN GATE ---
@@ -319,6 +356,16 @@ app.post("/api/margin", async (req, res) => {
     res.json(await signedRequest("POST", "/fapi/v1/marginType", {
       symbol: String(symbol).toUpperCase(), marginType,
     }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get("/api/margin-type", async (req, res) => {
+  try {
+    const sym = String(req.query.symbol || "").toUpperCase();
+    const risk = await signedRequest("GET", "/fapi/v2/positionRisk", { symbol: sym });
+    const entry = Array.isArray(risk) ? (risk.find(p => p.symbol === sym) || risk[0]) : risk;
+    const mt = entry && entry.marginType ? entry.marginType : null; // "cross" | "isolated"
+    res.json({ symbol: sym, marginType: mt });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -562,6 +609,30 @@ app.post("/api/cancel-algo", async (req, res) => {
     res.json(await signedRequest("DELETE", "/fapi/v1/algoOrder", { algoId }));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+app.post("/api/cancel-all-orders", async (req, res) => {
+  try {
+    let cancelled = 0, failed = 0;
+    // limit entry orders
+    const open = await signedRequest("GET", "/fapi/v1/openOrders");
+    if (Array.isArray(open)) {
+      for (const o of open) {
+        const r = await signedRequest("DELETE", "/fapi/v1/order", { symbol: o.symbol, orderId: o.orderId });
+        if (r.orderId || r.status === "CANCELED") cancelled++; else failed++;
+      }
+    }
+    // TP/SL conditional (algo) orders
+    const algos = await signedRequest("GET", "/fapi/v1/openAlgoOrders");
+    if (Array.isArray(algos)) {
+      for (const a of algos) {
+        const r = await signedRequest("DELETE", "/fapi/v1/algoOrder", { algoId: a.algoId });
+        if (r.code === "200" || r.code === 200 || r.algoId) cancelled++; else failed++;
+      }
+    }
+    res.json({ ok: true, cancelled, failed });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 
 app.post("/api/set-stop", async (req, res) => {
   try {

@@ -119,7 +119,8 @@
 
   <h1>Open Position</h1>
   <div class="box" style="display:block;">
-    <div class="field"><label>Symbol</label><input id="symbol" value="BTCUSDT" /></div>
+    <div class="field"><label>Symbol</label><input id="symbol" value="BTCUSDT" oninput="refreshSymPrice()" onchange="syncMarginType()" /></div>
+    <div class="muted" id="symPrice" onclick="fillLimitFromPrice()" style="margin-top:5px; font-size:12px; cursor:pointer;">Mark: —</div>
     <div class="half">
       <div class="field">
         <label>Order Type</label>
@@ -173,7 +174,9 @@
     <button class="tab active" id="tabPositions" onclick="switchTab('positions')">Positions (<span id="posCount">0</span>)</button>
     <button class="tab" id="tabOrders" onclick="switchTab('orders')">Open Orders (<span id="ordCount">0</span>)</button>
     <button class="closeall" id="closeAllBtn" onclick="closeAll()">Close All</button>
+    <button class="closeall" id="cancelAllBtn" onclick="cancelAllOrders()" style="display:none;">Cancel All</button>
   </div>
+
   <div id="positions"><p class="muted">loading...</p></div>
   <div id="orders" style="display:none;"><p class="muted">loading...</p></div>
 
@@ -273,6 +276,35 @@
       document.getElementById("limitPriceField").style.display = t === "LIMIT" ? "" : "none";
     }
 
+    async function refreshSymPrice() {
+      const sym = document.getElementById("symbol").value.trim().toUpperCase();
+      const el = document.getElementById("symPrice");
+      if (!sym || !el) return;
+      try {
+        const res = await fetch("/api/price?symbol=" + sym);
+        const d = await res.json();
+        if (d.price) {
+          const px = Number(d.price);
+          el.dataset.price = d.price;
+          const disp = px >= 1 ? fmt(px) : String(px);
+          el.innerHTML = "Mark: <b style='color:#eaecef'>" + disp + "</b> <span style='color:#f0b90b'>· tap to fill limit</span>";
+        } else {
+          el.textContent = "Mark: —";
+        }
+      } catch (e) {}
+    }
+
+    function fillLimitFromPrice() {
+      const el = document.getElementById("symPrice");
+      const px = el && el.dataset ? el.dataset.price : "";
+      if (!px) return;
+      if (orderType !== "LIMIT") {
+        setOrderType("LIMIT");
+        document.getElementById("orderTypeSel").value = "LIMIT";
+      }
+      document.getElementById("limitPrice").value = px;
+    }
+
     function switchTab(name) {
       const isPos = name === "positions";
       document.getElementById("tabPositions").classList.toggle("active", isPos);
@@ -280,7 +312,9 @@
       document.getElementById("positions").style.display = isPos ? "" : "none";
       document.getElementById("orders").style.display = isPos ? "none" : "";
       document.getElementById("closeAllBtn").style.display = isPos ? "" : "none";
+      document.getElementById("cancelAllBtn").style.display = isPos ? "none" : "";
     }
+
 
     function warnaRatio(r) {
       if (r == null) return "";
@@ -333,6 +367,20 @@
         if (sukses) setStatus("✅ Margin: " + (type === "CROSSED" ? "Cross" : "Isolated"), "green");
         else setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
       } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+
+    async function syncMarginType() {
+      const sym = document.getElementById("symbol").value.trim().toUpperCase();
+      if (!sym) return;
+      try {
+        const res = await fetch("/api/margin-type?symbol=" + sym);
+        const d = await res.json();
+        if (d.marginType) {
+          const val = d.marginType.toLowerCase() === "isolated" ? "ISOLATED" : "CROSSED";
+          const sel = document.getElementById("marginSel");
+          if (sel) sel.value = val;
+        }
+      } catch (e) {}
     }
 
         async function openPosisi(side) {
@@ -473,6 +521,29 @@
         const box = document.getElementById("orders");
         if (box) box.innerHTML = "<p class='red'>Failed: " + e.message + "</p>";
       }
+    }
+
+    async function cancelAllOrders() {
+      const ok = await customConfirm({
+        title: "Cancel ALL pending orders?",
+        bodyHtml:
+          '<div class="mrow"><span>This cancels</span><span>ALL limit + TP/SL</span></div>' +
+          '<div class="mrow"><span>⚠️ Warning</span><span class="red">stops on positions too</span></div>',
+        confirmText: "Cancel All",
+        confirmClass: "short",
+      });
+      if (!ok) return;
+      setStatus("Cancelling all orders...", "muted");
+      try {
+        const res = await fetch("/api/cancel-all-orders", { method: "POST" });
+        const d = await res.json();
+        if (d.ok) {
+          setStatus("✅ Cancelled " + d.cancelled + (d.failed ? " (" + d.failed + " failed)" : "") + " orders", d.failed ? "muted" : "green");
+          muatOrders();
+        } else {
+          setStatus("❌ " + (d.error || JSON.stringify(d)), "red");
+        }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
     }
 
     async function cancelOrder(symbol, orderId) {
@@ -697,15 +768,18 @@
     }
 
     let _pollStarted = false;
-        function startApp() {
+    function startApp() {
       document.getElementById("loginOverlay").classList.remove("show");
       loadMode();
       muat();
       muatOrders();
+      refreshSymPrice();
+      syncMarginType();
       if (!_pollStarted) {
         _pollStarted = true;
         setInterval(muat, 2000);
         setInterval(muatOrders, 5000);
+        setInterval(refreshSymPrice, 3000);
       }
     }
 
