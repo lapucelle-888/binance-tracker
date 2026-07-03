@@ -4,6 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Binance Tracker</title>
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Tracker" />
+  <meta name="theme-color" content="#0b0e11" />
   <style>
     body { font-family: -apple-system, system-ui, sans-serif; background:#0b0e11; color:#eaecef; margin:0; padding:12px; }
     h1 { font-size:17px; margin:14px 0 6px; }
@@ -117,11 +122,12 @@
     <div class="box"><div class="label">Margin Balance</div><div class="val" id="margin">—</div></div>
     <div class="box"><div class="label">Unrealized PNL</div><div class="val" id="upnl">—</div></div>
     <div class="box"><div class="label">Available</div><div class="val" id="avail">—</div></div>
+    <div class="box"><div class="label">Margin Ratio</div><div class="val" id="acctRatio">—</div></div>
   </div>
 
   <h1>Open Position</h1>
   <div class="box" style="display:block;">
-    <div class="field"><label>Symbol</label><input id="symbol" value="BTCUSDT" oninput="refreshSymPrice()" onchange="syncMarginType()" /></div>
+    <div class="field"><label>Symbol</label><input id="symbol" value="BTCUSDT" oninput="refreshSymPriceDebounced()" onchange="syncMarginType()" /></div>
     <div class="muted" id="symPrice" onclick="fillLimitFromPrice()" style="margin-top:5px; font-size:12px; cursor:pointer;">Mark: —</div>
     <div class="half">
       <div class="field">
@@ -145,16 +151,16 @@
     </div>
     <div class="field" id="limitPriceField" style="display:none;">
       <label>Limit Price</label>
-      <input id="limitPrice" placeholder="e.g. 70.00" />
+      <input id="limitPrice" placeholder="e.g. 70.00" inputmode="decimal" />
     </div>
 
     <div class="half">
-      <div class="field"><label>Margin (USDT)</label><input id="usdt" value="10" /></div>
-      <div class="field"><label>Leverage (x)</label><input id="lev" value="20" /></div>
+      <div class="field"><label>Margin (USDT)</label><input id="usdt" value="10" inputmode="decimal" /></div>
+      <div class="field"><label>Leverage (x)</label><input id="lev" value="20" inputmode="decimal" /></div>
     </div>
     <div class="half">
-      <div class="field"><label>Take Profit (% price)</label><input id="tp" placeholder="e.g. 5" /></div>
-      <div class="field"><label>Stop Loss (% price)</label><input id="sl" placeholder="e.g. 3" /></div>
+      <div class="field"><label>Take Profit (% price)</label><input id="tp" placeholder="e.g. 5" inputmode="decimal"/></div>
+      <div class="field"><label>Stop Loss (% price)</label><input id="sl" placeholder="e.g. 3" inputmode="decimal"/></div>
     </div>
 
     <div class="hedge-toggle" id="hedgeToggle" onclick="toggleHedge()">
@@ -174,13 +180,14 @@
 
   <div class="tabbar">
     <button class="tab active" id="tabPositions" onclick="switchTab('positions')">Positions (<span id="posCount">0</span>)</button>
-    <button class="tab" id="tabOrders" onclick="switchTab('orders')">Open Orders (<span id="ordCount">0</span>)</button>
+    <button class="tab" id="tabOrders" onclick="switchTab('orders')">Orders (<span id="ordCount">0</span>)</button>
+    <button class="tab" id="tabHistory" onclick="switchTab('history')">History</button>
     <button class="closeall" id="closeAllBtn" onclick="closeAll()">Close All</button>
     <button class="closeall" id="cancelAllBtn" onclick="cancelAllOrders()" style="display:none;">Cancel All</button>
   </div>
-
   <div id="positions"><p class="muted">loading...</p></div>
   <div id="orders" style="display:none;"><p class="muted">loading...</p></div>
+  <div id="history" style="display:none;"><p class="muted">loading...</p></div>
 
   <div class="overlay" id="modalOverlay">
     <div class="modal">
@@ -279,6 +286,7 @@
     }
 
     async function refreshSymPrice() {
+      if (pollPaused()) return;
       const sym = document.getElementById("symbol").value.trim().toUpperCase();
       const el = document.getElementById("symPrice");
       if (!sym || !el) return;
@@ -308,15 +316,47 @@
     }
 
     function switchTab(name) {
-      const isPos = name === "positions";
-      document.getElementById("tabPositions").classList.toggle("active", isPos);
-      document.getElementById("tabOrders").classList.toggle("active", !isPos);
-      document.getElementById("positions").style.display = isPos ? "" : "none";
-      document.getElementById("orders").style.display = isPos ? "none" : "";
-      document.getElementById("closeAllBtn").style.display = isPos ? "" : "none";
-      document.getElementById("cancelAllBtn").style.display = isPos ? "none" : "";
+      ["positions", "orders", "history"].forEach(function (k) {
+        const tabId = "tab" + k.charAt(0).toUpperCase() + k.slice(1);
+        document.getElementById(tabId).classList.toggle("active", k === name);
+        document.getElementById(k).style.display = k === name ? "" : "none";
+      });
+      document.getElementById("closeAllBtn").style.display = name === "positions" ? "" : "none";
+      document.getElementById("cancelAllBtn").style.display = name === "orders" ? "" : "none";
+      if (name === "history") muatHistory();
     }
 
+    async function muatHistory() {
+      const box = document.getElementById("history");
+      box.innerHTML = "<p class='muted'>loading...</p>";
+      try {
+        const res = await fetch("/api/history");
+        const d = await res.json();
+        if (d.error) { box.innerHTML = "<p class='red'>Error: " + d.error + "</p>"; return; }
+        const t = d.today;
+        let html =
+          '<div class="pos">' +
+            '<div class="head"><span class="sym">Today (UTC)</span>' +
+            '<span class="tag ' + (t.net >= 0 ? 'long-tag' : 'short-tag') + '">' + (t.net >= 0 ? '+' : '') + fmt(t.net) + ' USDT</span></div>' +
+            '<div class="row"><span>Realized PNL</span><span class="' + warna(t.pnl) + '">' + (t.pnl >= 0 ? '+' : '') + fmt(t.pnl) + ' USDT</span></div>' +
+            '<div class="row"><span>Fees</span><span>' + fmt(t.fees) + ' USDT</span></div>' +
+            '<div class="row"><span>Funding</span><span>' + fmt(t.funding) + ' USDT</span></div>' +
+          '</div>';
+        if (!d.trades.length) {
+          html += "<p class='muted'>No closed trades in last " + d.days + " days.</p>";
+        } else {
+          html += d.trades.map(function (tr) {
+            const dt = new Date(tr.time);
+            const when = (dt.getMonth() + 1) + "/" + dt.getDate() + " " +
+              String(dt.getHours()).padStart(2, "0") + ":" + String(dt.getMinutes()).padStart(2, "0");
+            return '<div class="pos"><div class="head"><span class="sym">' + tr.symbol + '</span>' +
+              '<span class="' + warna(tr.amount) + '">' + (tr.amount >= 0 ? '+' : '') + fmt(tr.amount) + ' USDT</span></div>' +
+              '<div class="row"><span>Closed</span><span>' + when + '</span></div></div>';
+          }).join("");
+        }
+        box.innerHTML = html;
+      } catch (e) { box.innerHTML = "<p class='red'>Failed: " + e.message + "</p>"; }
+    }
 
     function warnaRatio(r) {
       if (r == null) return "";
@@ -431,6 +471,13 @@
           if (pctAvail >= 50) {
             body += '<div class="mrow"><span>⚠️ Margin</span><span class="red">' + pctAvail.toFixed(0) + '% of available</span></div>';
           }
+          const liqDist = Number(leverage) > 0 ? (100 / Number(leverage)) : 0;
+          if (slPct && liqDist && Number(slPct) >= liqDist * 0.9) {
+            body += '<div class="mrow"><span>🚨 SL</span><span class="red">' + slPct + '% vs liq ~' + liqDist.toFixed(1) + '% — liq hits first!</span></div>';
+          }
+          if (!slPct) {
+            body += '<div class="mrow"><span>⚠️ SL</span><span class="red">No stop loss set</span></div>';
+          }
       body += '<div class="mrow"><span>Mode</span><span>' + (hedgeOn ? "Hedge" : "One-way") + '</span></div>';
       if (tpPrice) body += '<div class="mrow"><span>Take Profit</span><span class="green">+' + tpPct + '% → ~' + fmt(tpPrice) + '</span></div>';
       if (slPrice) body += '<div class="mrow"><span>Stop Loss</span><span class="red">-' + slPct + '% → ~' + fmt(slPrice) + '</span></div>';
@@ -472,6 +519,7 @@
     }
 
     async function muatOrders() {
+      if (pollPaused()) return;
       try {
         const [r1, r2] = await Promise.all([
           fetch("/api/open-orders").then(r => r.json()),
@@ -479,6 +527,7 @@
         ]);
         const regular = r1.orders || [];
         const algos = r2.orders || [];
+        window._algos = algos;
         const n = regular.length + algos.length;
         const c = document.getElementById("ordCount");
         if (c) c.textContent = n;
@@ -662,6 +711,16 @@
     }
     
     async function closePos(symbol, positionSide) {
+      const ok = await customConfirm({
+        title: "Close position " + symbol + "?",
+        bodyHtml:
+          '<div class="mrow"><span>Symbol</span><span>' + symbol + '</span></div>' +
+          '<div class="mrow"><span>Close</span><span>100% (market)</span></div>' +
+          '<div class="mrow"><span>⚠️ Note</span><span class="red">Closes entire position</span></div>',
+        confirmText: "Close 100%",
+        confirmClass: "short",
+      });
+      if (!ok) return;
       setStatus("Closing " + symbol + " " + positionSide + "...", "muted");
       try {
         const res = await fetch("/api/close", {
@@ -711,7 +770,54 @@
       } catch (e) { setStatus("❌ " + e.message, "red"); }
     }
 
+    function fmtPrice(n) {
+      const x = Number(n);
+      if (!isFinite(x) || x === 0) return "-";
+      if (x >= 1000) return fmt(x, 2);
+      if (x >= 1) return fmt(x, 4);
+      let s = x.toFixed(8);
+      s = s.replace(/0+$/, "").replace(/\.$/, "");
+      return s;
+    }
+
+    function stopsFor(symbol, positionSide) {
+      const algos = window._algos || [];
+      let tp = null, sl = null;
+      for (const a of algos) {
+        if (a.symbol !== symbol) continue;
+        if (positionSide && positionSide !== "BOTH" && a.positionSide !== positionSide) continue;
+        if ((a.orderType || "").includes("TAKE_PROFIT")) tp = a.triggerPrice;
+        else if ((a.orderType || "").includes("STOP")) sl = a.triggerPrice;
+      }
+      return { tp, sl };
+    }
+
+    function stopRow(p) {
+      const s = stopsFor(p.symbol, p.positionSide);
+      const tpTxt = s.tp ? '<span class="green">' + fmtPrice(s.tp) + '</span>' : '<span style="color:#848e9c">—</span>';
+      const slTxt = s.sl ? '<span class="red">' + fmtPrice(s.sl) + '</span>' : '<span class="red">⚠️ none</span>';
+      return '<div class="row"><span>TP / SL</span><span>' + tpTxt + ' / ' + slTxt + '</span></div>';
+    }
+
+    let _symTimer = null;
+    function refreshSymPriceDebounced() {
+      clearTimeout(_symTimer);
+      _symTimer = setTimeout(refreshSymPrice, 400);
+    }
+
+    function pollPaused() {
+      if (document.hidden) return true;                       // tab di background / HP kekunci
+      if (!sessionStorage.getItem("appToken")) return true;   // app lagi ke-Lock
+      return false;
+    }
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden && sessionStorage.getItem("appToken")) {
+        muat(); muatOrders(); refreshSymPrice();              // balik ke tab → refresh instan
+      }
+    });
+
     async function muat() {
+      if (pollPaused()) return;
       try {
         const res = await fetch("/api/data");
         const d = await res.json();
@@ -725,6 +831,11 @@
         u.className = "val " + warna(d.unrealizedPnl);
         document.getElementById("avail").textContent = fmt(d.availableBalance) + " USDT";
         window._avail = d.availableBalance;
+        const mr = document.getElementById("acctRatio");
+        if (mr) {
+          mr.textContent = fmt(d.marginRatio) + "%";
+          mr.className = "val " + warnaRatio(d.marginRatio);
+        }
 
         const pc = document.getElementById("posCount");
         if (pc) pc.textContent = d.positions.length;
@@ -747,10 +858,11 @@
             <div class="row"><span>Size</span><span>${p.size} (${p.marginType})</span></div>
             <div class="row"><span>Margin Used</span><span>${fmt(p.margin)} USDT</span></div>
             <div class="row"><span>Margin Ratio</span><span class="${warnaRatio(p.marginRatio)}">${p.marginRatio == null ? '-' : fmt(p.marginRatio) + '%'}</span></div>
-            <div class="row"><span>Entry / Mark</span><span>${fmt(p.entryPrice)} / ${fmt(p.markPrice)}</span></div>
+            <div class="row"><span>Entry / Mark</span><span>${fmtPrice(p.entryPrice)} / ${fmtPrice(p.markPrice)}</span></div>
             <div class="row"><span>PNL</span><span class="${warna(p.pnl)}">${p.pnl >= 0 ? '+' : ''}${fmt(p.pnl)} USDT</span></div>
             <div class="row"><span>ROI</span><span class="${warna(p.roi)}">${p.roi >= 0 ? '+' : ''}${fmt(p.roi)}%</span></div>
-            <div class="row"><span>Liq. Price</span><span>${Number(p.liqPrice) > 0 ? fmt(p.liqPrice) : '-'}</span></div>
+            <div class="row"><span>Liq. Price</span><span>${Number(p.liqPrice) > 0 ? fmtPrice(p.liqPrice) : '-'}</span></div>
+            ${stopRow(p)}
             <div class="partialrow">
               <button class="pbtn" onclick="closePartial('${p.symbol}','${p.positionSide}',25)">Close 25%</button>
               <button class="pbtn" onclick="closePartial('${p.symbol}','${p.positionSide}',50)">Close 50%</button>
@@ -784,6 +896,28 @@
         setInterval(refreshSymPrice, 3000);
       }
     }
+
+    // ===== ANTI DOUBLE-TAP GUARD =====
+    let _busy = false;
+    ["openPosisi", "closePos", "closePartial", "closeAll", "setStop", "cancelOrder", "cancelAlgo", "cancelAllOrders"].forEach(function (name) {
+      const orig = window[name];
+      if (typeof orig !== "function") return; // nama gak ketemu → skip, jangan bikin error
+      window[name] = async function () {
+        if (_busy) {
+          setStatus("⏳ Hold on — previous action still running.", "muted");
+          return;
+        }
+        _busy = true;
+        const failsafe = setTimeout(function () { _busy = false; }, 30000);
+        try {
+          return await orig.apply(this, arguments);
+        } finally {
+          clearTimeout(failsafe);
+          _busy = false;
+        }
+      };
+    });
+    // ===== END GUARD =====
 
     // gerbang awal: ada token → langsung jalan; gak ada → tetap di layar login
     if (sessionStorage.getItem("appToken")) startApp();

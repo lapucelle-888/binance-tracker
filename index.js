@@ -215,7 +215,6 @@ async function checkAlerts() {
       const key = `${posId}_${band}`;
       const last = lastAlerted[key];
       if (last && (now - last) < ALERT_COOLDOWN_MS) continue;
-      lastAlerted[key] = now;
 
       const pnl = Number(p.unRealizedProfit);
       const emoji = band > 0 ? "🟢" : "🔴";
@@ -224,7 +223,8 @@ async function checkAlerts() {
         `${emoji} ${p.symbol} ${sideLabel}\n` +
         `ROI ${sgn}${roi.toFixed(2)}% (threshold ${band > 0 ? "+" : ""}${band}%)\n` +
         `PNL ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} USDT`;
-      await sendTelegram(text);
+      const sent = await sendTelegram(text);
+      if (sent && sent.ok) lastAlerted[key] = now; // stempel CUMA kalau beneran terkirim
     }
 
     for (const key of Object.keys(lastAlerted)) {
@@ -247,7 +247,8 @@ app.post("/api/login", (req, res) => {
     if (loginAttempts[k].lockUntil < now && loginAttempts[k].count === 0) delete loginAttempts[k];
   }
 
-  const key = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "unknown";
+  const parts = String(req.headers["x-forwarded-for"] || "").split(",").map(s => s.trim()).filter(Boolean);
+  const key = parts.length ? parts[parts.length - 1] : (req.ip || "unknown");
   const rec = loginAttempts[key] || { count: 0, lockUntil: 0 };
 
   // lagi kekunci?
@@ -688,6 +689,43 @@ app.post("/api/set-stop", async (req, res) => {
     const r = await signedRequest("POST", "/fapi/v1/algoOrder", params);
     if (r.algoId) res.json({ ok: true, algoId: r.algoId, kind: k, trigger, replaced: cancelled });
     else res.json({ error: (r.msg || JSON.stringify(r)) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get("/api/history", async (req, res) => {
+  try {
+    const days = 7;
+    const startTime = Date.now() - days * 24 * 60 * 60 * 1000;
+    const income = await signedRequest("GET", "/fapi/v1/income", { startTime, limit: 1000 });
+    if (!Array.isArray(income)) return res.json({ error: income.msg || JSON.stringify(income) });
+
+    const d = new Date();
+    d.setUTCHours(0, 0, 0, 0);
+    const todayStart = d.getTime();
+
+    let todayPnl = 0, todayFees = 0, todayFunding = 0;
+    const trades = [];
+
+    for (const it of income) {
+      const amt = Number(it.income);
+      const t = Number(it.time);
+      const isToday = t >= todayStart;
+      if (it.incomeType === "REALIZED_PNL") {
+        if (isToday) todayPnl += amt;
+        trades.push({ symbol: it.symbol, amount: amt, time: t });
+      } else if (it.incomeType === "COMMISSION" && isToday) {
+        todayFees += amt;
+      } else if (it.incomeType === "FUNDING_FEE" && isToday) {
+        todayFunding += amt;
+      }
+    }
+    trades.sort((a, b) => b.time - a.time);
+
+    res.json({
+      today: { pnl: todayPnl, fees: todayFees, funding: todayFunding, net: todayPnl + todayFees + todayFunding },
+      trades: trades.slice(0, 50),
+      days,
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
