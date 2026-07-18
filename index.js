@@ -18,7 +18,7 @@ const LOGIN_LOCK_MS = 5 * 60 * 1000;   // lama lockout (5 menit)
 const loginAttempts = {};              // { ip: { count, lockUntil } }
 
 const ROI_THRESHOLDS = [-200, -100, -50, 50, 100, 200, 500];
-const ALERT_COOLDOWN_MS = 60 * 60 * 1000;
+const ALERT_COOLDOWN_MS = 4 * 60 * 60 * 1000;
 const lastAlerted = {};
 let alertRunning = false;
 
@@ -192,6 +192,8 @@ function currentBand(roi) {
   return hit;
 }
 
+let prevOpen = null; // snapshot posisi polling sebelumnya (null = baru nyala)
+
 async function checkAlerts() {
   if (alertRunning) return;
   alertRunning = true;
@@ -200,6 +202,18 @@ async function checkAlerts() {
     const open = risk.filter(p => Number(p.positionAmt) !== 0);
     const liveIds = new Set();
     const now = Date.now();
+    const openNow = {};
+    for (const p of open) {
+      const sideLabel = (p.positionSide && p.positionSide !== "BOTH")
+        ? p.positionSide
+        : (Number(p.positionAmt) > 0 ? "LONG" : "SHORT");
+      openNow[`${p.symbol}_${sideLabel}`] = {
+        symbol: p.symbol,
+        side: sideLabel,
+        pnl: Number(p.unRealizedProfit),
+        roi: roiOf(p)
+      };
+    }
 
     for (const p of open) {
       const sideLabel = (p.positionSide && p.positionSide !== "BOTH")
@@ -231,6 +245,23 @@ async function checkAlerts() {
       const posId = key.split("_").slice(0, 2).join("_");
       if (!liveIds.has(posId)) delete lastAlerted[key];
     }
+        // --- CLOSED POSITION ALERT (TP/SL/Liq/manual) ---
+    if (prevOpen) {
+      for (const posId of Object.keys(prevOpen)) {
+        if (!liveIds.has(posId)) {
+          const q = prevOpen[posId];
+          const win = q.pnl >= 0;
+          const text =
+            `${win ? "✅" : "❌"} ${q.symbol} ${q.side} CLOSED\n` +
+            `PNL ≈ ${win ? "+" : ""}${q.pnl.toFixed(2)} USDT ` +
+            `(ROI ${q.roi >= 0 ? "+" : ""}${q.roi.toFixed(2)}%)\n` +
+            `Last seen before close — check History for exact figure`;
+          await sendTelegram(text);
+        }
+      }
+    }
+    prevOpen = openNow;
+
   } catch (e) {
   } finally {
     alertRunning = false;
