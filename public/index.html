@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-title" content="Tracker" />
   <meta name="theme-color" content="#0b0e11" />
   <style>
-    body { font-family: -apple-system, system-ui, sans-serif; background:#0b0e11; color:#eaecef; margin:0; padding:12px; }
+    body { font-family: -apple-system, system-ui, sans-serif; background:#0b0e11; color:#eaecef; margin:0 auto; padding:12px; max-width:520px; }
     h1 { font-size:17px; margin:14px 0 6px; }
     .muted { color:#848e9c; font-weight:400; font-size:13px; }
     .apphead { display:flex; justify-content:space-between; align-items:center; gap:10px; }
@@ -91,13 +91,28 @@
     .stopbtn { border:none; border-radius:8px; padding:9px 12px; font-size:13px; font-weight:700; color:#fff; cursor:pointer; white-space:nowrap; }
     .stopbtn.tp { background:#2ebd85; }
     .stopbtn.sl { background:#f6465d; }
+    .stopbtn.be { background:#f0b90b; color:#0b0e11; }
 
     .partialrow { display:flex; gap:6px; margin-top:9px; }
     .pbtn { flex:1; background:#2b3139; color:#eaecef; border:none; border-radius:8px; padding:9px; font-size:12px; font-weight:600; cursor:pointer; }
     .pbtn:active { background:#3a424d; }
+    .pbtn.pclose { flex:1.5; background:#3b1414; color:#f6465d; font-weight:700; }
 
     .live { color: #ff4d4d; font-weight: bold; font-size: 0.6em; vertical-align: middle; }
 
+    /* ===== compact position card ===== */
+    .phead { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+    .pnlbox { text-align:right; flex-shrink:0; }
+    .pnlbig { font-size:16px; font-weight:700; }
+    .roismall { font-size:12px; font-weight:600; margin-top:1px; }
+    .pgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:7px 10px; margin:9px 0; }
+    .plabel { font-size:10px; color:#848e9c; text-transform:uppercase; letter-spacing:.4px; white-space:nowrap; }
+    .pval { font-size:13px; font-weight:600; margin-top:2px; }
+    .chiprow { display:flex; gap:6px; flex-wrap:wrap; }
+    .chip { background:#0b0e11; border:1px solid #2b3139; border-radius:6px; padding:3px 9px; font-size:12px; font-weight:600; color:#b7bdc6; }
+    .chip.warn { border-color:#f6465d; color:#f6465d; }
+    .netbar { background:#12161c; border:1px dashed #3a424d; border-radius:10px; padding:8px 12px; margin-bottom:9px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:#848e9c; }
+    .netbar span:last-child { font-weight:700; }
   </style>
 </head>
 <body>
@@ -278,7 +293,7 @@
       document.getElementById("hedgeToggle").classList.toggle("on", hedge);
       document.getElementById("hedgeState").textContent = hedge ? "ON · Hedge" : "OFF · One-way";
     }
-    
+
     let orderType = "MARKET";
     function setOrderType(t) {
       orderType = t;
@@ -455,7 +470,7 @@
           if (!basePrice) { setStatus("❌ Couldn't fetch price for TP/SL. Try again.", "red"); return; }
         }
       }
-          
+
       let tpPrice = "", slPrice = "";
       if (tpPct) tpPrice = side === "BUY" ? basePrice * (1 + tpPct / 100) : basePrice * (1 - tpPct / 100);
       if (slPct) slPrice = side === "BUY" ? basePrice * (1 - slPct / 100) : basePrice * (1 + slPct / 100);
@@ -683,6 +698,43 @@
       } catch (e) { setStatus("❌ " + e.message, "red"); }
     }
 
+    async function setBE(symbol, positionSide, entryPrice, markPrice, side) {
+      const entry = Number(entryPrice), mark = Number(markPrice);
+      if (!entry || !mark) { setStatus("❌ Price data unavailable, try again.", "red"); return; }
+      const inProfit = side === "LONG" ? mark > entry : mark < entry;
+      if (!inProfit) {
+        setStatus("❌ " + symbol + " " + side + " not in profit — SL at entry would trigger instantly. BE is for green positions.", "red");
+        return;
+      }
+      const ok = await customConfirm({
+        title: "Move SL to breakeven?",
+        bodyHtml:
+          '<div class="mrow"><span>Symbol</span><span>' + symbol + '</span></div>' +
+          '<div class="mrow"><span>SL trigger</span><span>' + fmtPrice(entry) + ' (entry)</span></div>' +
+          '<div class="mrow"><span>Note</span><span>Replaces existing SL</span></div>',
+        confirmText: "Set BE",
+        confirmClass: "short",
+      });
+      if (!ok) return;
+      setStatus("Setting SL to breakeven...", "muted");
+      try {
+        const res = await fetch("/api/set-stop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol, positionSide, kind: "SL", triggerPrice: String(entry) }),
+        });
+        const d = await res.json();
+        if (d.ok || d.algoId) {
+          let msg = "✅ SL @ breakeven (" + fmtPrice(entry) + ")";
+          if (d.replaced) msg += " — replaced " + d.replaced + " old";
+          setStatus(msg, "green");
+          muatOrders();
+        } else {
+          setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
+        }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+
     async function closePartial(symbol, positionSide, percent) {
       const ok = await customConfirm({
         title: "Close " + percent + "% of " + symbol + "?",
@@ -709,7 +761,7 @@
         }
       } catch (e) { setStatus("❌ " + e.message, "red"); }
     }
-    
+
     async function closePos(symbol, positionSide) {
       const ok = await customConfirm({
         title: "Close position " + symbol + "?",
@@ -792,11 +844,52 @@
       return { tp, sl };
     }
 
-    function stopRow(p) {
+    function chipRow(p) {
       const s = stopsFor(p.symbol, p.positionSide);
-      const tpTxt = s.tp ? '<span class="green">' + fmtPrice(s.tp) + '</span>' : '<span style="color:#848e9c">—</span>';
-      const slTxt = s.sl ? '<span class="red">' + fmtPrice(s.sl) + '</span>' : '<span class="red">⚠️ none</span>';
-      return '<div class="row"><span>TP / SL</span><span>' + tpTxt + ' / ' + slTxt + '</span></div>';
+      const tp = s.tp
+        ? '<span class="chip">TP <span class="green">' + fmtPrice(s.tp) + '</span></span>'
+        : '<span class="chip">TP —</span>';
+      const sl = s.sl
+        ? '<span class="chip">SL <span class="red">' + fmtPrice(s.sl) + '</span></span>'
+        : '<span class="chip warn">SL ⚠️ none</span>';
+      return '<div class="chiprow">' + tp + sl + '</div>';
+    }
+
+    function posCard(p) {
+      return `
+        <div class="pos">
+          <div class="phead">
+            <div>
+              <span class="sym">${p.symbol}</span>
+              <span class="tag ${p.side === 'LONG' ? 'long-tag' : 'short-tag'}">${p.side} ${p.leverage}x</span>
+            </div>
+            <div class="pnlbox">
+              <div class="pnlbig ${warna(p.pnl)}">${p.pnl >= 0 ? '+' : ''}${fmt(p.pnl)} USDT</div>
+              <div class="roismall ${warna(p.roi)}">${p.roi >= 0 ? '+' : ''}${fmt(p.roi)}%</div>
+            </div>
+          </div>
+          <div class="pgrid">
+            <div><div class="plabel">Entry</div><div class="pval">${fmtPrice(p.entryPrice)}</div></div>
+            <div><div class="plabel">Mark</div><div class="pval">${fmtPrice(p.markPrice)}</div></div>
+            <div><div class="plabel">Liq</div><div class="pval">${Number(p.liqPrice) > 0 ? fmtPrice(p.liqPrice) : '-'}</div></div>
+            <div><div class="plabel">Size · ${p.marginType}</div><div class="pval">${p.size}</div></div>
+            <div><div class="plabel">Margin</div><div class="pval">${fmt(p.margin)} USDT</div></div>
+            <div><div class="plabel">M. Ratio</div><div class="pval ${warnaRatio(p.marginRatio)}">${p.marginRatio == null ? '-' : fmt(p.marginRatio) + '%'}</div></div>
+          </div>
+          ${chipRow(p)}
+          <div class="partialrow">
+            <button class="pbtn" onclick="closePartial('${p.symbol}','${p.positionSide}',25)">25%</button>
+            <button class="pbtn" onclick="closePartial('${p.symbol}','${p.positionSide}',50)">50%</button>
+            <button class="pbtn" onclick="closePartial('${p.symbol}','${p.positionSide}',75)">75%</button>
+            <button class="pbtn pclose" onclick="closePos('${p.symbol}','${p.positionSide}')">Close ${p.side}</button>
+          </div>
+          <div class="stoprow">
+            <input class="stopinput" id="stop_${p.symbol}_${p.positionSide}" placeholder="Trigger price" inputmode="decimal" />
+            <button class="stopbtn be" onclick="setBE('${p.symbol}','${p.positionSide}','${p.entryPrice}','${p.markPrice}','${p.side}')">BE</button>
+            <button class="stopbtn tp" onclick="setStop('${p.symbol}','${p.positionSide}','TP')">TP</button>
+            <button class="stopbtn sl" onclick="setStop('${p.symbol}','${p.positionSide}','SL')">SL</button>
+          </div>
+        </div>`;
     }
 
     let _symTimer = null;
@@ -849,33 +942,31 @@
           box.innerHTML = "<p class='muted'>No open positions.</p>";
           return;
         }
-        box.innerHTML = d.positions.map(p => `
-          <div class="pos">
-            <div class="head">
-              <span class="sym">${p.symbol}</span>
-              <span class="tag ${p.side === 'LONG' ? 'long-tag' : 'short-tag'}">${p.side} ${p.leverage}x</span>
-            </div>
-            <div class="row"><span>Size</span><span>${p.size} (${p.marginType})</span></div>
-            <div class="row"><span>Margin Used</span><span>${fmt(p.margin)} USDT</span></div>
-            <div class="row"><span>Margin Ratio</span><span class="${warnaRatio(p.marginRatio)}">${p.marginRatio == null ? '-' : fmt(p.marginRatio) + '%'}</span></div>
-            <div class="row"><span>Entry / Mark</span><span>${fmtPrice(p.entryPrice)} / ${fmtPrice(p.markPrice)}</span></div>
-            <div class="row"><span>PNL</span><span class="${warna(p.pnl)}">${p.pnl >= 0 ? '+' : ''}${fmt(p.pnl)} USDT</span></div>
-            <div class="row"><span>ROI</span><span class="${warna(p.roi)}">${p.roi >= 0 ? '+' : ''}${fmt(p.roi)}%</span></div>
-            <div class="row"><span>Liq. Price</span><span>${Number(p.liqPrice) > 0 ? fmtPrice(p.liqPrice) : '-'}</span></div>
-            ${stopRow(p)}
-            <div class="partialrow">
-              <button class="pbtn" onclick="closePartial('${p.symbol}','${p.positionSide}',25)">Close 25%</button>
-              <button class="pbtn" onclick="closePartial('${p.symbol}','${p.positionSide}',50)">Close 50%</button>
-              <button class="pbtn" onclick="closePartial('${p.symbol}','${p.positionSide}',75)">Close 75%</button>
-            </div>
-            <div class="stoprow">
-              <input class="stopinput" id="stop_${p.symbol}_${p.positionSide}" placeholder="Trigger price" inputmode="decimal" />
-              <button class="stopbtn tp" onclick="setStop('${p.symbol}','${p.positionSide}','TP')">Set TP</button>
-              <button class="stopbtn sl" onclick="setStop('${p.symbol}','${p.positionSide}','SL')">Set SL</button>
-            </div>
-            <button class="closebtn" onclick="closePos('${p.symbol}','${p.positionSide}')">Close ${p.side}</button>
-          </div>
-        `).join("");
+
+        // group per symbol → net exposure bar buat pasangan hedge
+        const groups = {};
+        d.positions.forEach(function (p) {
+          if (!groups[p.symbol]) groups[p.symbol] = [];
+          groups[p.symbol].push(p);
+        });
+
+        let html = "";
+        Object.keys(groups).forEach(function (sym) {
+          const ps = groups[sym];
+          if (ps.length > 1) {
+            let net = 0;
+            ps.forEach(function (p) { net += (p.side === "LONG" ? 1 : -1) * Number(p.size); });
+            const coin = sym.replace(/USDT$/, "");
+            const mark = Number(ps[0].markPrice) || 0;
+            const netUsd = net * mark;
+            let netStr = net.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+            html += '<div class="netbar"><span>⚖️ ' + sym + ' hedged · net exposure</span>' +
+                    '<span class="' + warna(net) + '">' + (net >= 0 ? '+' : '') + netStr + ' ' + coin +
+                    ' (≈ ' + (netUsd >= 0 ? '+' : '') + fmt(netUsd) + ' USDT)</span></div>';
+          }
+          ps.forEach(function (p) { html += posCard(p); });
+        });
+        box.innerHTML = html;
       } catch (e) {
         document.getElementById("positions").innerHTML = "<p class='red'>Failed: " + e.message + "</p>";
       }
@@ -899,7 +990,7 @@
 
     // ===== ANTI DOUBLE-TAP GUARD =====
     let _busy = false;
-    ["openPosisi", "closePos", "closePartial", "closeAll", "setStop", "cancelOrder", "cancelAlgo", "cancelAllOrders"].forEach(function (name) {
+    ["openPosisi", "closePos", "closePartial", "closeAll", "setStop", "setBE", "cancelOrder", "cancelAlgo", "cancelAllOrders"].forEach(function (name) {
       const orig = window[name];
       if (typeof orig !== "function") return; // nama gak ketemu → skip, jangan bikin error
       window[name] = async function () {
