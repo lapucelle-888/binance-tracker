@@ -99,6 +99,7 @@
     .pbtn.pclose { flex:1.5; background:#3b1414; color:#f6465d; font-weight:700; }
 
     .live { color: #ff4d4d; font-weight: bold; font-size: 0.6em; vertical-align: middle; }
+    .live.stale { color:#f0b90b; }
 
     /* ===== compact position card ===== */
     .phead { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
@@ -113,6 +114,14 @@
     .chip.warn { border-color:#f6465d; color:#f6465d; }
     .netbar { background:#12161c; border:1px dashed #3a424d; border-radius:10px; padding:8px 12px; margin-bottom:9px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:#848e9c; }
     .netbar span:last-child { font-weight:700; }
+
+    /* ===== form helpers (v9.2) ===== */
+    .qchips { display:flex; gap:6px; margin-top:7px; }
+    .qchip { flex:1; background:#0b0e11; border:1px solid #2b3139; color:#b7bdc6; border-radius:6px; padding:7px 0; font-size:12px; font-weight:600; cursor:pointer; }
+    .qchip:active { background:#2b3139; }
+    .schips { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+    .schip { background:#0b0e11; border:1px solid #2b3139; color:#b7bdc6; border-radius:6px; padding:4px 10px; font-size:12px; font-weight:600; cursor:pointer; }
+    .schip:active { border-color:#f0b90b; }
   </style>
 </head>
 <body>
@@ -127,7 +136,7 @@
     </div>
   </div>
   <div class="apphead">
-    <h1>💰 Binance Futures Tracker <span class="live">● LIVE</span></h1>
+    <h1>💰 Binance Futures Tracker <span class="live" id="liveBadge">● LIVE</span></h1>
     <div style="display:flex; gap:8px;">
       <button class="bellbtn" onclick="testTelegram()" title="Test Telegram">🔔</button>
       <button class="lockbtn" onclick="lockApp()" title="Lock app">🔒</button>
@@ -144,6 +153,7 @@
   <div class="box" style="display:block;">
     <div class="field"><label>Symbol</label><input id="symbol" value="BTCUSDT" oninput="refreshSymPriceDebounced()" onchange="syncMarginType()" /></div>
     <div class="muted" id="symPrice" onclick="fillLimitFromPrice()" style="margin-top:5px; font-size:12px; cursor:pointer;">Mark: —</div>
+    <div class="schips" id="recentSyms"></div>
     <div class="half">
       <div class="field">
         <label>Order Type</label>
@@ -170,13 +180,20 @@
     </div>
 
     <div class="half">
-      <div class="field"><label>Margin (USDT)</label><input id="usdt" value="10" inputmode="decimal" /></div>
-      <div class="field"><label>Leverage (x)</label><input id="lev" value="20" inputmode="decimal" /></div>
+      <div class="field"><label>Margin (USDT)</label><input id="usdt" value="10" inputmode="decimal" oninput="updatePreview()" /></div>
+      <div class="field"><label>Leverage (x)</label><input id="lev" value="20" inputmode="decimal" oninput="updatePreview()" /></div>
+    </div>
+    <div class="qchips">
+      <button class="qchip" onclick="setMarginPct(0.25)">25%</button>
+      <button class="qchip" onclick="setMarginPct(0.5)">50%</button>
+      <button class="qchip" onclick="setMarginPct(0.75)">75%</button>
+      <button class="qchip" onclick="setMarginPct(1)">Max</button>
     </div>
     <div class="half">
-      <div class="field"><label>Take Profit (% price)</label><input id="tp" placeholder="e.g. 5" inputmode="decimal"/></div>
-      <div class="field"><label>Stop Loss (% price)</label><input id="sl" placeholder="e.g. 3" inputmode="decimal"/></div>
+      <div class="field"><label>Take Profit (% price)</label><input id="tp" placeholder="e.g. 5" inputmode="decimal" oninput="updatePreview()"/></div>
+      <div class="field"><label>Stop Loss (% price)</label><input id="sl" placeholder="e.g. 3" inputmode="decimal" oninput="updatePreview()"/></div>
     </div>
+    <div class="muted" id="pnlPreview" style="margin-top:6px; font-size:12px;"></div>
 
     <div class="hedge-toggle" id="hedgeToggle" onclick="toggleHedge()">
       <div class="hedge-label">
@@ -299,6 +316,55 @@
       orderType = t;
       document.getElementById("limitPriceField").style.display = t === "LIMIT" ? "" : "none";
     }
+
+    // ===== FORM HELPERS (v9.2) =====
+    function setMarginPct(p) {
+      const avail = Number(window._avail || 0);
+      if (!avail) { setStatus("❌ Available balance not loaded yet.", "red"); return; }
+      const factor = p === 1 ? 0.95 : p; // Max = 95% biar ada buffer fee
+      document.getElementById("usdt").value = (avail * factor).toFixed(2);
+      updatePreview();
+    }
+
+    function updatePreview() {
+      const el = document.getElementById("pnlPreview");
+      if (!el) return;
+      const usdt = Number(document.getElementById("usdt").value) || 0;
+      const lev = Number(document.getElementById("lev").value) || 0;
+      const tp = Number(document.getElementById("tp").value) || 0;
+      const sl = Number(document.getElementById("sl").value) || 0;
+      const notional = usdt * lev;
+      if (!notional || (!tp && !sl)) { el.innerHTML = ""; return; }
+      const parts = [];
+      if (tp) parts.push("TP ≈ <span class='green'>+" + fmt(notional * tp / 100) + " USDT</span>");
+      if (sl) parts.push("SL ≈ <span class='red'>-" + fmt(notional * sl / 100) + " USDT</span>");
+      el.innerHTML = "Est. PNL: " + parts.join(" · ") + " <span style='color:#5a6470'>(excl. fees)</span>";
+    }
+
+    const RECENT_KEY = "recentSyms";
+    function loadRecentSyms() {
+      try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch (e) { return []; }
+    }
+    function addRecentSym(sym) {
+      let arr = loadRecentSyms().filter(function (s) { return s !== sym; });
+      arr.unshift(sym);
+      arr = arr.slice(0, 5);
+      try { localStorage.setItem(RECENT_KEY, JSON.stringify(arr)); } catch (e) {}
+      renderRecentSyms();
+    }
+    function renderRecentSyms() {
+      const el = document.getElementById("recentSyms");
+      if (!el) return;
+      el.innerHTML = loadRecentSyms().map(function (s) {
+        return '<button class="schip" onclick="pickSym(\'' + s + '\')">' + s + '</button>';
+      }).join("");
+    }
+    function pickSym(sym) {
+      document.getElementById("symbol").value = sym;
+      refreshSymPrice();
+      syncMarginType();
+    }
+    // ===== END FORM HELPERS =====
 
     async function refreshSymPrice() {
       if (pollPaused()) return;
@@ -526,6 +592,7 @@
           if (d.leverage) msg += " | " + d.leverage + "x";
           if (d.extra && d.extra.length) msg += " | " + d.extra.join(", ");
           setStatus(msg, (d.extra && d.extra.some(x => x.includes("⚠️"))) ? "muted" : "green");
+          addRecentSym(symbol);
           muat();
         } else {
           setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
@@ -909,6 +976,18 @@
       }
     });
 
+    // ===== STALENESS BADGE (v9.2) =====
+    let _lastOk = null;
+    function updateLiveBadge() {
+      const b = document.getElementById("liveBadge");
+      if (!b || !_lastOk) return;
+      if (pollPaused()) return; // lagi di background / kekunci → gak usah nuduh stale
+      const age = Math.floor((Date.now() - _lastOk) / 1000);
+      if (age <= 6) { b.textContent = "● LIVE"; b.className = "live"; }
+      else { b.textContent = "● STALE " + age + "s"; b.className = "live stale"; }
+    }
+    // ===== END STALENESS =====
+
     async function muat() {
       if (pollPaused()) return;
       try {
@@ -918,6 +997,7 @@
           document.getElementById("positions").innerHTML = "<p class='red'>Error: " + d.error + "</p>";
           return;
         }
+        _lastOk = Date.now();
         document.getElementById("margin").textContent = fmt(d.marginBalance) + " USDT";
         const u = document.getElementById("upnl");
         u.textContent = (d.unrealizedPnl >= 0 ? "+" : "") + fmt(d.unrealizedPnl) + " USDT";
@@ -980,11 +1060,14 @@
       muatOrders();
       refreshSymPrice();
       syncMarginType();
+      renderRecentSyms();
+      updatePreview();
       if (!_pollStarted) {
         _pollStarted = true;
         setInterval(muat, 2000);
         setInterval(muatOrders, 5000);
         setInterval(refreshSymPrice, 3000);
+        setInterval(updateLiveBadge, 1000);
       }
     }
 
