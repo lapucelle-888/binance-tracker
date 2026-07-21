@@ -585,6 +585,48 @@ app.post("/api/close-partial", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.post("/api/close-limit", async (req, res) => {
+  try {
+    const { symbol, positionSide, quantity, price } = req.body;
+    const sym = String(symbol).toUpperCase();
+    const px = Number(price);
+    if (!px || px <= 0) return res.json({ error: "Price wajib > 0." });
+    const qtyReq = Number(quantity);
+    if (!qtyReq || qtyReq <= 0) return res.json({ error: "Quantity wajib > 0." });
+
+    const risk = await signedRequest("GET", "/fapi/v2/positionRisk");
+    const pos = risk.find(p =>
+      p.symbol === sym &&
+      Number(p.positionAmt) !== 0 &&
+      (!positionSide || positionSide === "BOTH" || p.positionSide === positionSide)
+    );
+    if (!pos) return res.json({ error: "Posisi " + sym + " gak ketemu." });
+
+    const amt = Number(pos.positionAmt);
+    const isLong = pos.positionSide === "LONG" || (pos.positionSide === "BOTH" && amt > 0);
+    const closeSide = isLong ? "SELL" : "BUY";
+    const hedge = pos.positionSide && pos.positionSide !== "BOTH";
+
+    const tickSize = await getTickSize(sym);
+    const limitPx = tickSize ? roundToTick(px, tickSize) : String(px);
+
+    const stepSize = await getStepSize(sym);
+    const qty = stepSize ? roundToStep(qtyReq, stepSize) : String(qtyReq);
+    if (Number(qty) <= 0) return res.json({ error: "Quantity kebuletin jadi 0." });
+
+    const params = {
+      symbol: sym, side: closeSide, type: "LIMIT",
+      quantity: qty, price: limitPx, timeInForce: "GTC",
+    };
+    if (hedge) params.positionSide = pos.positionSide;
+    else params.reduceOnly = "true";
+
+    const r = await signedRequest("POST", "/fapi/v1/order", params);
+    if (r.orderId) res.json({ ok: true, orderId: r.orderId, price: limitPx, qty });
+    else res.json({ error: r.msg || JSON.stringify(r) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get("/api/open-orders", async (req, res) => {
   try {
     const orders = await signedRequest("GET", "/fapi/v1/openOrders");

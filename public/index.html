@@ -92,6 +92,8 @@
     .stopbtn.tp { background:#2ebd85; }
     .stopbtn.sl { background:#f6465d; }
     .stopbtn.be { background:#f0b90b; color:#0b0e11; }
+    .stopbtn.lmt { background:#3861fb; }
+    .lmtinput { flex:0 0 64px; width:64px; min-width:0; margin-top:0; padding:9px 6px; font-size:12px; text-align:center; }
 
     .partialrow { display:flex; gap:6px; margin-top:9px; }
     .pbtn { flex:1; background:#2b3139; color:#eaecef; border:none; border-radius:8px; padding:9px; font-size:12px; font-weight:600; cursor:pointer; }
@@ -829,6 +831,39 @@
       } catch (e) { setStatus("❌ " + e.message, "red"); }
     }
 
+    async function closeLimit(symbol, positionSide, size) {
+      const el = document.getElementById("lmt_" + symbol + "_" + positionSide);
+      const price = el ? el.value.trim() : "";
+      if (!Number(price) || Number(price) <= 0) {
+        setStatus("❌ Isi limit price dulu (angka > 0).", "red"); return;
+      }
+      const ok = await customConfirm({
+        title: "Close " + symbol + " with LIMIT?",
+        bodyHtml:
+          '<div class="mrow"><span>Symbol</span><span>' + symbol + '</span></div>' +
+          '<div class="mrow"><span>Price</span><span>' + price + '</span></div>' +
+          '<div class="mrow"><span>Quantity</span><span>' + size + ' (full position)</span></div>',
+        confirmText: "Place LMT",
+        confirmClass: "short",
+      });
+      if (!ok) return;
+      setStatus("Placing LIMIT close order...", "muted");
+      try {
+        const res = await fetch("/api/close-limit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol, positionSide, quantity: size, price }),
+        });
+        const d = await res.json();
+        if (d.ok || d.orderId) {
+          setStatus("✅ LIMIT close order placed @ " + (d.price || price), "green");
+          muatOrders();
+        } else {
+          setStatus("❌ " + (d.msg || d.error || JSON.stringify(d)), "red");
+        }
+      } catch (e) { setStatus("❌ " + e.message, "red"); }
+    }
+
     async function closePos(symbol, positionSide) {
       const ok = await customConfirm({
         title: "Close position " + symbol + "?",
@@ -955,6 +990,8 @@
             <button class="stopbtn be" onclick="setBE('${p.symbol}','${p.positionSide}','${p.entryPrice}','${p.markPrice}','${p.side}')">BE</button>
             <button class="stopbtn tp" onclick="setStop('${p.symbol}','${p.positionSide}','TP')">TP</button>
             <button class="stopbtn sl" onclick="setStop('${p.symbol}','${p.positionSide}','SL')">SL</button>
+            <input class="lmtinput" id="lmt_${p.symbol}_${p.positionSide}" placeholder="Price" inputmode="decimal" />
+            <button class="stopbtn lmt" onclick="closeLimit('${p.symbol}','${p.positionSide}','${p.size}')">LMT</button>
           </div>
         </div>`;
     }
@@ -1015,7 +1052,7 @@
 
         // jangan render ulang kartu kalau lagi ngetik trigger (biar input gak kehapus tiap 2 detik)
         const active = document.activeElement;
-        if (active && active.classList && active.classList.contains("stopinput")) return;
+        if (active && active.classList && (active.classList.contains("stopinput") || active.classList.contains("lmtinput"))) return;
 
         const box = document.getElementById("positions");
         if (d.positions.length === 0) {
@@ -1073,7 +1110,7 @@
 
     // ===== ANTI DOUBLE-TAP GUARD =====
     let _busy = false;
-    ["openPosisi", "closePos", "closePartial", "closeAll", "setStop", "setBE", "cancelOrder", "cancelAlgo", "cancelAllOrders"].forEach(function (name) {
+    ["openPosisi", "closePos", "closePartial", "closeAll", "setStop", "setBE", "closeLimit", "cancelOrder", "cancelAlgo", "cancelAllOrders"].forEach(function (name) {
       const orig = window[name];
       if (typeof orig !== "function") return; // nama gak ketemu → skip, jangan bikin error
       window[name] = async function () {
